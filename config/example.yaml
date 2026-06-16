@@ -1,0 +1,100 @@
+app:
+  # GUI startet Beat-Detection automatisch beim Öffnen (true/false)
+  auto_start: true
+
+audio:
+  # Name oder Teilstring des gewünschten Eingabegeräts
+  device_name: "BlackHole 16ch"
+  # Fallback: Systemstandard verwenden wenn Gerät nicht gefunden
+  fallback_to_default: true
+  # Samplerate
+  sample_rate: 44100
+  # Anzahl Eingangskanäle die vom Gerät geöffnet werden
+  channels: 2
+  # Welches Kanalpaar (0-basiert) für Pegel/Analyse verwenden
+  # 0 = Kanäle 1+2, 1 = Kanäle 3+4, etc.
+  channel_pair: 0
+  # Blockgröße in Samples pro Callback (~11.6 ms bei 44100 Hz)
+  block_size: 512
+
+monitor:
+  # Breite der Pegelanzeige in Zeichen
+  bar_width: 40
+  # Aktualisierungsrate der Anzeige (Callbacks pro Refresh)
+  refresh_every: 4
+  # dBFS-Untergrenze der Anzeige
+  db_floor: -60
+
+bpm:
+  # --- BPM-Bereich ---
+  # Kandidaten außerhalb werden verworfen.
+  # Techno/Electronic: 120–180  Hip-Hop: 70–110  allgemein: 70–180
+  bpm_min: 70.0
+  bpm_max: 180.0
+
+  # --- Drum-Band-Grenzen (Hz) ---
+  # Kick-Drum: Grundton und Obertöne der Bassdrum
+  kick_lo:  30.0
+  kick_hi: 120.0
+  # Snare: Körperton der Snare, enthält auch Rim-Shots
+  snare_lo:  180.0
+  snare_hi:  600.0
+  # Hi-Hat / Cymbal: hohe Transienten
+  hihat_lo: 2000.0
+  hihat_hi: 8000.0
+
+  # --- Mischgewichte für die kombinierte OSS ---
+  # Kick dominiert, da Kick-Periodizität am stabilsten für Tempo-Tracking ist.
+  # Alle drei Gewichte bilden zusammen das OSS; sie müssen nicht auf 1 normiert sein.
+  kick_weight:  0.60
+  snare_weight: 0.25
+  hihat_weight: 0.15
+
+  # --- Autokorrelations-Fenster ---
+  # Länge des OSS-Puffers. Länger = stabiler, langsamer bei Tempo-Wechseln.
+  oss_window_s: 8.0
+
+  # --- Onset-Erkennung (Beat-Phase-Tracking) ---
+  # Flux-Multiplikator über dem lokalen Mittel für Onset-Erkennung
+  onset_threshold: 1.4
+  # Mindestabstand zwischen zwei Onsets in Sekunden
+  refractory: 0.2
+
+  # --- Stabilisierung ---
+  # EMA-Glättungsfaktor α (0 = eingefroren, 1 = sofort reagierend)
+  smoothing: 0.2
+  # Mindeständerung in BPM, ab der der EMA reagiert (Hysterese gegen Zittern)
+  hysteresis: 1.0
+
+  # --- Tempo-Hold / Lock ---
+  # Mindest-Confidence um den ersten Lock zu setzen (searching → locked)
+  lock_confidence_min: 0.3
+  # Höhere Confidence-Hürde für einen Relock (verhindert Fehlsprünge)
+  relock_confidence_min: 0.5
+  # Sprünge ≤ max_jump_bpm werden direkt per EMA absorbiert (locked bleibt)
+  max_jump_bpm: 10.0
+  # Sprünge > hard_block_jump_bpm werden komplett ignoriert (kein Relock)
+  # Für Sprünge dazwischen gilt: erst Relock-Bestätigung abwarten
+  hard_block_jump_bpm: 15.0
+  # Wie viele aufeinanderfolgende Analysefenster (~1 s je) ein Kandidat
+  # stabil sein muss, bevor locked_bpm wechselt
+  relock_windows: 3
+  # Wie viele Sekunden Low-Confidence toleriert werden, bevor der Lock
+  # aufgegeben und in "searching" gewechselt wird
+  hold_seconds: 8.0
+
+link:
+  # Ableton Link Integration aktivieren (benötigt Node.js + npm install im link/-Ordner)
+  enabled: true
+
+  # Beat-Quantum (Anzahl Schläge pro Loop/Phase-Zyklus)
+  # 4 = typisch für 4/4-Takt; 2 = Half-Time; 8 = Doppel-Loop
+  quantum: 4
+
+  # Minimaler Abstand zwischen zwei Tempo-Updates an Link (Millisekunden).
+  # Verhindert dass schnelle BPM-Schwankungen als Tempo-Änderungen in Link ankommen.
+  update_interval_ms: 200
+
+  # Mindest-BPM-Änderung damit ein neues Tempo an Link exportiert wird.
+  # Koppelt mit der Hysterese der Beat-Detection — verhindert Jitter.
+  tempo_hysteresis: 0.5

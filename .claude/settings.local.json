@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/bin/python -c \"import sys; sys.path.insert\\(0,'src'\\); import beat_detector, config; print\\('OK'\\)\")",
+      "Bash(npm --version)",
+      "Bash(pip show *)",
+      "Bash(npm install *)",
+      "Bash(npm show *)",
+      "Bash(npm search *)",
+      "Bash(timeout 2 node bridge.js)",
+      "Bash(.venv/bin/python -c ' *)"
+    ]
+  }
+}

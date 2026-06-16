@@ -1,0 +1,12 @@
+{
+  "name": "bpmdetect-link-bridge",
+  "version": "1.0.0",
+  "description": "Ableton Link bridge for bpmdetect — IPC via stdin/stdout JSON",
+  "main": "bridge.js",
+  "dependencies": {
+    "@ktamas77/abletonlink": "^1.2.3"
+  },
+  "engines": {
+    "node": ">=16"
+  }
+}
