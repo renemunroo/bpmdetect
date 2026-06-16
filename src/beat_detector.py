@@ -374,10 +374,8 @@ class BeatDetector:
         -----------------
         searching  → locked    : conf ≥ lock_conf_min, gültige BPM
         locked     → locked    : kleine Änderung (≤ max_jump) per EMA absorbiert
-        locked     → relocking : mittlere Änderung (max_jump < Δ ≤ hard_block)
-                                 mit conf ≥ relock_conf_min
+        locked     → relocking : jede größere Änderung mit conf ≥ relock_conf_min
         locked     → searching : conf < lock_conf_min für > hold_seconds
-        locked     → locked    : harter Sprung (> hard_block) wird ignoriert
         relocking  → locked    : relock_progress ≥ relock_windows
         relocking  → locked    : Kandidat driftet weg → Relock abgebrochen
         relocking  → locked    : Conf fällt → Relock abgebrochen
@@ -409,28 +407,26 @@ class BeatDetector:
                             self._smoothing * bpm_corrected
                             + (1.0 - self._smoothing) * self._locked_bpm
                         )
-                elif jump <= self._hard_block_jump_bpm:
-                    # Mittlere Änderung: Relock einleiten wenn Confidence hoch genug
-                    if conf >= self._relock_conf_min:
-                        tol = bpm_corrected * 0.04
-                        if (
-                            self._relock_candidate == 0.0
-                            or abs(bpm_corrected - self._relock_candidate) > tol
-                        ):
-                            # Neuer Kandidat — Zähler zurücksetzen
-                            self._relock_candidate = bpm_corrected
-                            self._relock_progress = 1
-                        else:
-                            self._relock_progress += 1
+                elif conf >= self._relock_conf_min:
+                    # Jede größere Änderung: Relock einleiten (kein hard_block mehr)
+                    tol = bpm_corrected * 0.04
+                    if (
+                        self._relock_candidate == 0.0
+                        or abs(bpm_corrected - self._relock_candidate) > tol
+                    ):
+                        # Neuer Kandidat — Zähler zurücksetzen
+                        self._relock_candidate = bpm_corrected
+                        self._relock_progress = 1
+                    else:
+                        self._relock_progress += 1
 
-                        if self._relock_progress >= self._relock_windows:
-                            self._locked_bpm = self._relock_candidate
-                            self._relock_candidate = 0.0
-                            self._relock_progress = 0
-                            self._tempo_state = "locked"
-                        else:
-                            self._tempo_state = "relocking"
-                # else: harter Sprung → komplett ignorieren
+                    if self._relock_progress >= self._relock_windows:
+                        self._locked_bpm = self._relock_candidate
+                        self._relock_candidate = 0.0
+                        self._relock_progress = 0
+                        self._tempo_state = "locked"
+                    else:
+                        self._tempo_state = "relocking"
 
         elif state == "relocking":
             if conf < self._lock_conf_min:
