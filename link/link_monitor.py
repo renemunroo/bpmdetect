@@ -33,6 +33,30 @@ else:
     BRIDGE = Path(__file__).resolve().parent / "monitor_bridge.js"
 TICK_MS = 120
 
+import os as _os_mod
+
+_NODE_CANDIDATES = [
+    "/usr/local/bin/node",
+    "/opt/homebrew/bin/node",
+    "/opt/local/bin/node",
+    _os_mod.path.expanduser("~/.nvm/versions/node"),
+]
+
+
+def _find_node() -> str | None:
+    found = shutil.which("node")
+    if found:
+        return found
+    for p in _NODE_CANDIDATES:
+        path = Path(p)
+        if path.is_file() and _os_mod.access(str(path), _os_mod.X_OK):
+            return str(path)
+        if path.is_dir():
+            bins = sorted(path.glob("*/bin/node"), reverse=True)
+            if bins:
+                return str(bins[0])
+    return None
+
 # Wie lange Link aktiviert sein muss (Sekunden) bevor eine Warnung erscheint,
 # wenn noch immer 0 Peers gefunden wurden.
 PEER_WARN_AFTER_S = 15.0
@@ -73,7 +97,7 @@ def _log_environment() -> str:
     log.info("Bridge       : %s  (exists=%s)", BRIDGE, BRIDGE.exists())
     log.info("Python       : %s", sys.executable)
 
-    node = shutil.which("node")
+    node = _find_node()
     if node:
         try:
             ver = subprocess.check_output([node, "--version"],
@@ -267,7 +291,7 @@ class Bridge:
         self.enabled_since: float = 0.0
 
     def start(self, init_tempo: float, init_quantum: int) -> bool:
-        node = shutil.which("node")
+        node = _find_node()
         if not node:
             log.error("node nicht im PATH gefunden.")
             return False

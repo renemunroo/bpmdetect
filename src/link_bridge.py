@@ -24,6 +24,31 @@ else:
 _BRIDGE_SCRIPT = _BRIDGE_DIR / "bridge.js"
 _NODE_READY_TIMEOUT = 5.0   # Sekunden bis "ready" erwartet wird
 
+# Übliche Node.js-Installationspfade (Finder/launchd haben eingeschränktes PATH)
+_NODE_CANDIDATES = [
+    "/usr/local/bin/node",
+    "/opt/homebrew/bin/node",
+    "/opt/local/bin/node",
+    os.path.expanduser("~/.nvm/versions/node"),   # NVM-Fallback: Verzeichnis
+]
+
+
+def _find_node() -> str | None:
+    """Sucht node-Binary in PATH und üblichen Installationsorten."""
+    found = shutil.which("node")
+    if found:
+        return found
+    for p in _NODE_CANDIDATES:
+        path = Path(p)
+        if path.is_file() and os.access(str(path), os.X_OK):
+            return str(path)
+        # NVM: nimm das neueste
+        if path.is_dir():
+            bins = sorted(path.glob("*/bin/node"), reverse=True)
+            if bins:
+                return str(bins[0])
+    return None
+
 
 class LinkBridge:
     """
@@ -60,9 +85,9 @@ class LinkBridge:
 
     def start(self) -> bool:
         """Startet den Node.js-Subprocess. Gibt True zurück wenn erfolgreich."""
-        node = shutil.which("node")
+        node = _find_node()
         if not node:
-            _warn("Node.js nicht gefunden (node im PATH erwartet).")
+            _warn("Node.js nicht gefunden (PATH + übliche Pfade durchsucht).")
             return False
 
         if not _BRIDGE_SCRIPT.exists():
