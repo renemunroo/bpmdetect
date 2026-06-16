@@ -24,7 +24,13 @@ import threading
 import time
 from pathlib import Path
 
-BRIDGE  = Path(__file__).resolve().parent / "monitor_bridge.js"
+if getattr(sys, "frozen", False):
+    import os as _os
+    _link_res = Path(_os.environ.get("RESOURCEPATH",
+                    str(Path(sys.executable).parent.parent / "Resources"))) / "link"
+    BRIDGE = _link_res / "monitor_bridge.js"
+else:
+    BRIDGE = Path(__file__).resolve().parent / "monitor_bridge.js"
 TICK_MS = 120
 
 # Wie lange Link aktiviert sein muss (Sekunden) bevor eine Warnung erscheint,

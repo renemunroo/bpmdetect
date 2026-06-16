@@ -15,7 +15,12 @@ import threading
 import time
 from pathlib import Path
 
-_BRIDGE_DIR    = Path(__file__).parent.parent / "link"
+if getattr(sys, "frozen", False):
+    import os as _os
+    _BRIDGE_DIR = Path(_os.environ.get("RESOURCEPATH",
+                       str(Path(sys.executable).parent.parent / "Resources"))) / "link"
+else:
+    _BRIDGE_DIR = Path(__file__).parent.parent / "link"
 _BRIDGE_SCRIPT = _BRIDGE_DIR / "bridge.js"
 _NODE_READY_TIMEOUT = 5.0   # Sekunden bis "ready" erwartet wird
 

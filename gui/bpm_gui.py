@@ -27,6 +27,15 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
+def _resource(rel: str) -> Path:
+    """Pfad zu gebündelten Ressourcen — funktioniert in Entwicklung und PyInstaller-Bundle."""
+    import sys, os
+    if getattr(sys, "frozen", False):
+        base = Path(os.environ.get("RESOURCEPATH",
+                    str(Path(sys.executable).parent.parent / "Resources")))
+        return base / rel
+    return Path(__file__).resolve().parent.parent / rel
+
 import config as cfg_mod
 from beat_detector import BeatDetector
 from capture import AudioCapture
@@ -131,9 +140,7 @@ class BpmGui(QWidget):
         self.setFixedWidth(430)
         self.setStyleSheet(f"QWidget {{ background-color: {BG}; color: {FG}; }}")
 
-        self._cfg_path  = initial_config or (
-            Path(__file__).resolve().parent.parent / "config" / "example.yaml"
-        )
+        self._cfg_path  = initial_config or _resource("config/example.yaml")
         self._cfg       = cfg_mod.load(self._cfg_path)
         self._capture   = None   # AudioCapture
         self._detector  = None   # BeatDetector
