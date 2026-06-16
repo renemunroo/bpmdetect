@@ -10,6 +10,7 @@ import os
 import select
 import shutil
 import subprocess
+from typing import Optional
 import sys
 import threading
 import time
@@ -33,7 +34,7 @@ _NODE_CANDIDATES = [
 ]
 
 
-def _find_node() -> str | None:
+def _find_node() -> Optional[str]:
     """Sucht node-Binary in PATH und üblichen Installationsorten."""
     found = shutil.which("node")
     if found:

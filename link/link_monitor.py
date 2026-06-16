@@ -43,7 +43,7 @@ _NODE_CANDIDATES = [
 ]
 
 
-def _find_node() -> str | None:
+def _find_node() -> "Optional[str]":
     found = shutil.which("node")
     if found:
         return found
