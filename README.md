@@ -1,6 +1,10 @@
 # bpmdetect
 
-Echtzeit-BPM-Detector für macOS — erfasst Audio über BlackHole oder ein beliebiges Eingabegerät und schätzt das Tempo in Echtzeit im Terminal.
+Realtime BPM Detector & Ableton Link Bridge
+
+Ein hochpräziser Echtzeit-BPM-Detektor, der Audiosignale direkt am Eingang analysiert. 
+Durch die gezielte Erkennung von Kick, Snare und Hi-Hat extrahiert das Tool das Tempo und wandelt dieses unmittelbar 
+in ein Ableton Link-Signal um.
 
 ## Funktionsweise
 
