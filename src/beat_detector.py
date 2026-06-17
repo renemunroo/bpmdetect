@@ -110,6 +110,8 @@ class BeatDetector:
         hard_block_jump_bpm: float = 15.0,
         relock_windows: int = 3,
         hold_seconds: float = 8.0,
+        large_jump_bpm: float = 20.0,
+        large_jump_hold_s: float = 5.0,
     ) -> None:
         self._sr = sample_rate
         self._bs = block_size
@@ -129,6 +131,8 @@ class BeatDetector:
         self._hard_block_jump_bpm = hard_block_jump_bpm
         self._relock_windows = relock_windows
         self._hold_seconds = hold_seconds
+        self._large_jump_bpm = large_jump_bpm
+        self._large_jump_hold_s = large_jump_hold_s
 
         # OSS-Puffer (ein Wert pro Block)
         oss_len = max(64, int(oss_window_s / self._hop))
@@ -169,6 +173,7 @@ class BeatDetector:
         self._locked_bpm: float = 0.0
         self._relock_candidate: float = 0.0
         self._relock_progress: int = 0
+        self._relock_candidate_since: float = 0.0
         self._low_conf_since: float = 0.0
 
         # Tempo-Update nur alle ~1 s
@@ -276,6 +281,10 @@ class BeatDetector:
         """(current_progress, relock_windows_needed)"""
         with self._lock:
             return (self._relock_progress, self._relock_windows)
+
+    def set_band_weights(self, kick: float, snare: float, hihat: float) -> None:
+        """Setzt die Mischgewichte der drei Drum-Bänder zur Laufzeit."""
+        self._band_weights = (kick, snare, hihat)  # tuple-Zuweisung ist atomar
 
     # ── interne Methoden ──────────────────────────────────────────────────────
 
@@ -417,13 +426,23 @@ class BeatDetector:
                         # Neuer Kandidat — Zähler zurücksetzen
                         self._relock_candidate = bpm_corrected
                         self._relock_progress = 1
+                        self._relock_candidate_since = now
                     else:
                         self._relock_progress += 1
 
-                    if self._relock_progress >= self._relock_windows:
+                    # Große Sprünge (> large_jump_bpm) brauchen zusätzlich
+                    # large_jump_hold_s Sekunden stabile Erkennung
+                    is_large = jump > self._large_jump_bpm
+                    hold_ok = (
+                        (now - self._relock_candidate_since) >= self._large_jump_hold_s
+                        if is_large else True
+                    )
+
+                    if self._relock_progress >= self._relock_windows and hold_ok:
                         self._locked_bpm = self._relock_candidate
                         self._relock_candidate = 0.0
                         self._relock_progress = 0
+                        self._relock_candidate_since = 0.0
                         self._tempo_state = "locked"
                     else:
                         self._tempo_state = "relocking"
@@ -447,6 +466,7 @@ class BeatDetector:
                     # Kandidat hat sich verschoben → Relock abbrechen
                     self._relock_candidate = 0.0
                     self._relock_progress = 0
+                    self._relock_candidate_since = 0.0
                     self._tempo_state = "locked"
 
     def _update_tempo(self, now: float) -> None:

@@ -23,7 +23,7 @@ import numpy as np
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QFrame,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QFrame,
     QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
 )
 
@@ -152,6 +152,12 @@ class BpmGui(QWidget):
         # Laufendes Peak-Maximum für relative Band-Score-Anzeige
         self._peak_kick = self._peak_snare = self._peak_hihat = 1e-12
 
+        # Original-Bandgewichte aus Config (für Checkbox-Toggle)
+        bcfg = cfg_mod.bpm_cfg(self._cfg)
+        self._w_kick  = bcfg.get("kick_weight",  0.6)
+        self._w_snare = bcfg.get("snare_weight", 0.25)
+        self._w_hihat = bcfg.get("hihat_weight", 0.15)
+
         self._build()
         self._populate_devices()
 
@@ -159,10 +165,15 @@ class BpmGui(QWidget):
         self._timer.timeout.connect(self._tick)
         self._timer.start(TICK_MS)
 
-        # Auto-Start: nach einem Tick starten, damit das Fenster erst erscheint
+        # Audio Auto-Start
         app_cfg = self._cfg.get("app", {})
         if app_cfg.get("auto_start", True):
             QTimer.singleShot(100, self._start)
+
+        # Link Auto-Start (unabhängig vom Audio)
+        lcfg = cfg_mod.link_cfg(self._cfg)
+        if lcfg.get("enabled", False):
+            QTimer.singleShot(300, self._autostart_link)
 
     # ── Layout ─────────────────────────────────────────────────────────────────
 
@@ -242,9 +253,20 @@ class BpmGui(QWidget):
         self._hihat_val  = _dim("0.0000")
         self._phase_wgt  = PhaseWidget(200, 11)
 
-        root.addLayout(_row_bar("Kick",      self._kick_bar,  self._kick_val))
-        root.addLayout(_row_bar("Snare",     self._snare_bar, self._snare_val))
-        root.addLayout(_row_bar("Hi-Hat",    self._hihat_bar, self._hihat_val))
+        chk_style = (f"QCheckBox {{ color: {DIM}; font-size: 9pt; }}"
+                     f"QCheckBox::indicator {{ width: 11px; height: 11px; }}")
+        self._kick_chk  = QCheckBox(); self._kick_chk.setChecked(True)
+        self._snare_chk = QCheckBox(); self._snare_chk.setChecked(True)
+        self._hihat_chk = QCheckBox(); self._hihat_chk.setChecked(True)
+        for chk in (self._kick_chk, self._snare_chk, self._hihat_chk):
+            chk.setStyleSheet(chk_style)
+        self._kick_chk.toggled.connect(self._on_band_toggle)
+        self._snare_chk.toggled.connect(self._on_band_toggle)
+        self._hihat_chk.toggled.connect(self._on_band_toggle)
+
+        root.addLayout(_row_bar_chk("Kick",   self._kick_chk,  self._kick_bar,  self._kick_val))
+        root.addLayout(_row_bar_chk("Snare",  self._snare_chk, self._snare_bar, self._snare_val))
+        root.addLayout(_row_bar_chk("Hi-Hat", self._hihat_chk, self._hihat_bar, self._hihat_val))
         root.addLayout(_row("Beat-Phase",    self._phase_wgt))
 
         root.addWidget(_hsep())
@@ -358,6 +380,8 @@ class BpmGui(QWidget):
             hard_block_jump_bpm=bcfg.get("hard_block_jump_bpm", 15.0),
             relock_windows=bcfg.get("relock_windows", 3),
             hold_seconds=bcfg.get("hold_seconds", 8.0),
+            large_jump_bpm=bcfg.get("large_jump_bpm", 20.0),
+            large_jump_hold_s=bcfg.get("large_jump_hold_s", 5.0),
         )
 
         # Peak-Tracking zurücksetzen
@@ -502,6 +526,28 @@ class BpmGui(QWidget):
                 self._link_btn.setChecked(False)
                 self._link_btn.setText("Link AN")
                 self._link_btn.setStyleSheet(_btn(RED, BG))
+
+    def _autostart_link(self):
+        if self._link is not None:
+            return
+        lcfg = cfg_mod.link_cfg(self._cfg)
+        bridge = LinkBridge(
+            quantum=lcfg.get("quantum", 4),
+            update_interval_ms=lcfg.get("update_interval_ms", 200.0),
+            tempo_hysteresis=lcfg.get("tempo_hysteresis", 0.5),
+        )
+        if bridge.start():
+            self._link = bridge
+            self._link_btn.setChecked(True)
+            self._link_btn.setText("Link AN")
+            self._link_btn.setStyleSheet(_btn(GREEN, BG))
+
+    def _on_band_toggle(self):
+        k = self._w_kick  if self._kick_chk.isChecked()  else 0.0
+        s = self._w_snare if self._snare_chk.isChecked() else 0.0
+        h = self._w_hihat if self._hihat_chk.isChecked() else 0.0
+        if self._detector is not None:
+            self._detector.set_band_weights(k, s, h)
 
     # ── Refresh (Main-Thread) ──────────────────────────────────────────────────
 
@@ -661,6 +707,19 @@ def _row_bar(label: str, bar: BarWidget, val: QLabel) -> QHBoxLayout:
     lbl = QLabel(label)
     lbl.setStyleSheet(f"color: {DIM}; font-size: 9pt;")
     lbl.setFixedWidth(50)
+    h.addWidget(lbl)
+    h.addWidget(bar)
+    h.addSpacing(6)
+    h.addWidget(val)
+    h.addStretch()
+    return h
+
+def _row_bar_chk(label: str, chk: QCheckBox, bar: BarWidget, val: QLabel) -> QHBoxLayout:
+    h = QHBoxLayout()
+    h.addWidget(chk)
+    lbl = QLabel(label)
+    lbl.setStyleSheet(f"color: {DIM}; font-size: 9pt;")
+    lbl.setFixedWidth(42)
     h.addWidget(lbl)
     h.addWidget(bar)
     h.addSpacing(6)

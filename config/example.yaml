@@ -83,6 +83,12 @@ bpm:
   # aufgegeben und in "searching" gewechselt wird
   hold_seconds: 8.0
 
+  # --- Große BPM-Sprünge ---
+  # Sprünge > large_jump_bpm müssen large_jump_hold_s Sekunden
+  # stabil erkannt werden bevor locked_bpm übernommen wird
+  large_jump_bpm: 20.0
+  large_jump_hold_s: 5.0
+
 link:
   # Ableton Link Integration aktivieren (benötigt Node.js + npm install im link/-Ordner)
   enabled: true
