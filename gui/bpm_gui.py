@@ -379,14 +379,14 @@ class BpmGui(QWidget):
                 self._link_btn.setStyleSheet(_btn(GREEN, BG))
 
         det  = self._detector
-        lnk  = self._link
         q    = self._q
 
         def on_block(block: np.ndarray) -> None:
             det.process(block)
             self._blk_count += 1
 
-            # Link updaten (rate-limitiert intern)
+            # Link updaten — self._link dynamisch lesen damit Watchdog-Reconnect wirkt
+            lnk = self._link
             if lnk is not None and lnk.available:
                 lnk.update(det.locked_bpm, det.beat_phase)
 
@@ -506,8 +506,23 @@ class BpmGui(QWidget):
     # ── Refresh (Main-Thread) ──────────────────────────────────────────────────
 
     def _tick(self):
+        # Link-Watchdog: Bridge automatisch neu starten wenn gestorben
+        if self._running and self._link is not None and not self._link.available:
+            self._link.stop()
+            self._link = None
+            lcfg = cfg_mod.link_cfg(self._cfg)
+            bridge = LinkBridge(
+                quantum=lcfg.get("quantum", 4),
+                update_interval_ms=lcfg.get("update_interval_ms", 200.0),
+                tempo_hysteresis=lcfg.get("tempo_hysteresis", 0.5),
+            )
+            if bridge.start():
+                self._link = bridge
+                self._link_btn.setChecked(True)
+                self._link_btn.setText("Link AN")
+                self._link_btn.setStyleSheet(_btn(GREEN, BG))
+
         try:
-            # Alle Queue-Einträge lesen, nur den neuesten verwenden
             snap = None
             while True:
                 try:
