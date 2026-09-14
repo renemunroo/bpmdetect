@@ -1,0 +1,29 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "poe2-web",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/rene/poe2-farming-advisor && npm run dev"],
+      "port": 5173
+    },
+    {
+      "name": "stundenabrechnung",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/rene/stundenabrechnung && npm run dev"],
+      "port": 3000
+    },
+    {
+      "name": "gastro-dev",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/rene/gastronomieschichtplaner/zusortieren && npm run dev -- --port 3001"],
+      "port": 3001
+    },
+    {
+      "name": "mokka-mitte-landingpage",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["-c", "cd /Users/rene/mokka-mitte-landingpage && npm run dev -- --port 3002"],
+      "port": 3002
+    }
+  ]
+}
