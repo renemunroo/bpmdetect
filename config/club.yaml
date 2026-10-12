@@ -1,0 +1,412 @@
+app:
+  # GUI startet Beat-Detection automatisch beim Öffnen (true/false)
+  auto_start: true
+
+audio:
+  # Name oder Teilstring des gewünschten Eingabegeräts
+  device_name: "BlackHole 2ch"
+  # Fallback: Systemstandard verwenden wenn Gerät nicht gefunden
+  fallback_to_default: true
+  # Samplerate - MUSS mit der tatsächlich konfigurierten Rate von
+  # REV7/BlackHole 2ch übereinstimmen (2026-09-22 bestätigt: 48000 Hz,
+  # nicht 44100 - vorher ein Mismatch-Risiko, siehe Live-Testplan).
+  # Ändert die FFT-Auflösung (fft_size=4096 ist fest, sample_rate-
+  # unabhängig codiert) auf 48000/4096 = 11.72 Hz/Bin statt 10.77 Hz/Bin
+  # bei 44100 Hz - Kick-Band (30-120Hz) ist dann 8 statt 9 Bins breit.
+  sample_rate: 48000
+  # Anzahl Eingangskanäle die vom Gerät geöffnet werden
+  channels: 2
+  # Welches Kanalpaar (0-basiert) für Pegel/Analyse verwenden
+  # 0 = Kanäle 1+2, 1 = Kanäle 3+4, etc.
+  channel_pair: 0
+  # Blockgröße in Samples pro Callback (~10.7 ms bei 48000 Hz)
+  block_size: 512
+
+monitor:
+  # Breite der Pegelanzeige in Zeichen
+  bar_width: 40
+  # Aktualisierungsrate der Anzeige (Callbacks pro Refresh)
+  refresh_every: 4
+  # dBFS-Untergrenze der Anzeige
+  db_floor: -60
+
+bpm:
+  # --- BPM-Bereich ---
+  # Kandidaten außerhalb werden verworfen.
+  # Techno/Electronic: 120–180  Hip-Hop: 70–110  allgemein: 70–180
+  bpm_min: 70.0
+  bpm_max: 180.0
+
+  # --- Drum-Band-Grenzen (Hz) ---
+  # Kick-Drum: Grundton und Obertöne der Bassdrum
+  kick_lo: 30.0
+  kick_hi: 120.0
+  # Snare: Körperton der Snare, enthält auch Rim-Shots
+  snare_lo: 180.0
+  snare_hi: 600.0
+  # Hi-Hat / Cymbal: hohe Transienten
+  hihat_lo: 2000.0
+  hihat_hi: 8000.0
+  # Clap: breitbandiger Knack, füllt die Lücke zwischen Snare und Hi-Hat.
+  # Eigenes viertes Band nur fürs Sound-to-Light (kein Tempo-Gewicht).
+  clap_lo: 700.0
+  clap_hi: 3000.0
+
+  # --- Mischgewichte für die kombinierte OSS ---
+  # Kick dominiert, da Kick-Periodizität am stabilsten für Tempo-Tracking ist.
+  # Alle drei Gewichte bilden zusammen das OSS; sie müssen nicht auf 1 normiert sein.
+  kick_weight: 0.60
+  snare_weight: 0.25
+  hihat_weight: 0.15
+
+  # --- Autokorrelations-Fenster ---
+  # Länge des OSS-Puffers. Länger = stabiler, langsamer bei Tempo-Wechseln.
+  oss_window_s: 8.0
+
+  # --- Onset-Erkennung (Beat-Phase-Tracking) ---
+  # Flux-Multiplikator über dem lokalen Mittel für Onset-Erkennung
+  onset_threshold: 2.5
+  # Optionale eigene Schwellen pro Band fürs Sound-to-Light (kickHit/
+  # snareHit/hihatHit) - überschreiben onset_threshold nur für dieses Band.
+  # Snare teilt sich ihr Frequenzband mit Gesang/Akkorden und braucht
+  # deshalb meist eine deutlich höhere Schwelle als Kick/Hihat.
+  kick_onset_threshold: 2.5
+  snare_onset_threshold: 2.5
+  hihat_onset_threshold: 2.5
+  clap_onset_threshold: 2.5
+  # Mindestabstand zwischen zwei Onsets in Sekunden
+  refractory: 0.2
+
+  # Optionaler KNN-Klassifikator (tools/train_drum_classifier.py) als
+  # Alternative zur Frequenzband-Erkennung oben - klassifiziert jeden
+  # erkannten Treffer als GENAU eine Klasse (kick/snare/hihat) statt vier
+  # unabhaengige Bandschwellen zu vergleichen. Auskommentieren = aus.
+  drum_classifier_model: "models/drum_knn.pkl"
+
+  # --- Boolescher Snare-Trigger-Detektor (für DMX-Events) ---
+  # Mean+Faktor*StdDev-Schwelle über ein gleitendes Fenster, Snare als
+  # Koinzidenz zweier Bänder (Body UND Snap müssen beide innerhalb eines
+  # kurzen Zeitfensters anschlagen), und ein harter Hold-off statt sanft
+  # abklingendem Puls - für sauberes True/False statt kontinuierlicher
+  # Stärke. Landet als kickTrigger/snareTrigger im Sound-to-Light-Payload.
+  # (Kick hat einen eigenen Kalman-Filter-Tracker, siehe unten.)
+  trigger_snare_a_lo: 200.0
+  trigger_snare_a_hi: 300.0
+  trigger_snare_b_lo: 2500.0
+  trigger_snare_b_hi: 4500.0
+  # Länge des gleitenden Puffers für Mean/StdDev (Sekunden)
+  trigger_window_s: 0.4
+  # Wie viele Standardabweichungen über dem Mittel ein Flux liegen muss.
+  # Höher = weniger empfindlich/weniger Fehltrigger.
+  trigger_snare_std_factor: 1.5
+  # Mindestabstand zwischen zwei Triggern desselben Bands (Sekunden)
+  trigger_snare_holdoff_s: 0.15
+  # Wie eng Body- und Snap-Treffer zeitlich beieinander liegen müssen, um
+  # als eine gemeinsame Snare zu zählen (Sekunden)
+  trigger_snare_coincidence_s: 0.06
+
+  # --- Gewichtete Snare-Bewertung (2026-09-22) ---
+  # Ersetzt die starre "Body UND Snap müssen beide ihre eigene Schwelle
+  # einzeln reißen"-Koinzidenz durch eine gewichtete Bewertung. Trigger
+  # feuert wenn: beide Bänder moderat aktiv sind, ODER eines klar aktiv
+  # ist und das andere zumindest teilweise vorhanden (trigger_snare_allow_
+  # weak_body) - deckt Latino/Reggaeton-Snares/Claps mit schwachem Body ab.
+  # Ein einzelnes Band allein (das andere komplett still) reicht NIE.
+  # Gewichte für den Score (body_weight*body + snap_weight*snap) - müssen
+  # nicht auf 1 summieren.
+  trigger_snare_body_weight: 0.5
+  trigger_snare_snap_weight: 0.5
+  # Mindestwert relativ zur EIGENEN adaptiven Schwelle des Bands (1.0 =
+  # genau an der Schwelle) - "0.35" heißt mindestens 35% des Wegs dorthin,
+  # nicht ein absoluter Energiewert. Verhindert, dass ein Band, das
+  # praktisch gar nichts zeigt, trotzdem als "vorhanden" durchgeht.
+  trigger_snare_body_min: 0.35
+  trigger_snare_snap_min: 0.35
+  # true = neue gewichtete Logik (ein Band stark + das andere schwach
+  # reicht). false = altes strenges Verhalten (beide müssen voll über
+  # ihrer Schwelle liegen) als Opt-out.
+  trigger_snare_allow_weak_body: true
+  # Alias für trigger_snare_holdoff_s (gleiche Bedeutung, klarerer Name) -
+  # wenn gesetzt, überschreibt es trigger_snare_holdoff_s.
+  # trigger_snare_cooldown_s: 0.15
+  # HPSS-perkussive Bestätigung (nutzt das Snap-Band) - 0 = aus. Bewusst
+  # standardmäßig aus, da unklar ob sie Latino-Claps/Rimshots unterdrückt;
+  # bei Bedarf testweise auf z.B. 0.5 setzen.
+  trigger_snare_hpss_std_factor: 0.0
+
+  # --- Eigenständiger Clap-Trigger (2026-09-22) ---
+  # Bisher gab es nur clap_score/clap_onset (siehe oben), keinen eigenen
+  # booleschen Trigger. Absichtlich getrennt vom clap_lo/clap_hi-Band oben
+  # (700-3000Hz, nur für den kontinuierlichen Score) - ein Handclap-
+  # Transient hat typisch Energie bis in den 5-7kHz-Bereich (das eigentliche
+  # "Klatschen"-Rauschen). Überschneidet sich bewusst mit Snare-Snap/Hihat -
+  # die Trennung kommt primär über Anstiegsschärfe + HPSS + Cooldown, nicht
+  # über reine Bandisolierung. Landet als clapTrigger im Sound-to-Light-
+  # Payload (kickTrigger/snareTrigger gab es schon).
+  clap_trigger_lo: 1000.0
+  clap_trigger_hi: 6000.0
+  # Wie viele Standardabweichungen über dem gleitenden Mittel die Energie
+  # im Clap-Band liegen muss.
+  clap_trigger_std_factor: 2.0
+  # Wie viel höher die Energie gerade eben sein muss als vor ~35ms - gleiche
+  # Anschlagsschärfe-Logik wie beim Kick, filtert langsam anschwellende
+  # Signale (z.B. Hihat-Rolls) raus.
+  clap_trigger_rise_factor: 3.0
+  # Mindestabstand zwischen zwei Clap-Triggern (Sekunden) - verhindert
+  # Doppeltrigger auf einen einzelnen Treffer.
+  clap_trigger_cooldown_s: 0.15
+  # 0-1: wie sicher (Abstand über Schwelle + Anstiegsstärke kombiniert) ein
+  # Kandidat mindestens sein muss, um zu feuern.
+  clap_trigger_min_confidence: 0.3
+  # HPSS-perkussive Bestätigung - niedriger als beim Kick (0.5 statt 1.0),
+  # damit Latino-Claps/Rimshots nicht zu leicht unterdrückt werden. 0 = aus.
+  clap_trigger_hpss_std_factor: 0.5
+
+  # --- Trigger-Debug (2026-09-22) ---
+  # Zeigt bei Snare/Clap zusätzlich Rohenergie, Schwelle, HPSS-Energie,
+  # Score/Confidence, Zeit seit letztem Trigger und - falls abgelehnt -
+  # den Ablehnungsgrund (z.B. threshold_not_reached, missing_body,
+  # cooldown_active, ...) im Terminal an. Auch ohne dies über die
+  # BeatDetector.trigger_debug-Property programmatisch abrufbar.
+  debug_triggers: true
+
+  # --- Kalman-Filter-Beat-Tracker für den Kick-Trigger ---
+  # Ersetzt reine Schwellenwert-Erkennung: ein kausaler Tiefpass isoliert
+  # die Kick-Energie mit minimaler Latenz, ein Kalman-Filter (Zustand:
+  # nächster Beat-Zeitpunkt + Periode) nutzt erkannte Impulse nur zur
+  # gedämpften Nachjustierung einer eigenen, frei laufenden Vorhersage -
+  # der Trigger feuert auf dieser Vorhersage ("vorausschauendes Blitzen"),
+  # nicht auf der Rohmessung, und läuft durch Pausen/Drops einfach weiter
+  # ("Schwungrad"). Siehe _update_kalman_kick in beat_detector.py.
+  # Tiefpass-Grenzfrequenz für die Kick-Isolierung (Hz)
+  kalman_kick_cutoff_hz: 130.0
+  # Wie viele Standardabweichungen über dem Mittel ein Impuls liegen muss
+  kalman_kick_std_factor: 2.5
+  # Wie viel höher die Energie gerade eben sein muss als vor ~35ms - filtert
+  # sanft einschwingende Bassnoten raus, die zwar laut, aber nicht scharf
+  # angeschlagen sind (höher = strenger, weniger Fehltrigger von Basslines)
+  kalman_kick_sharpness_ratio: 4.0
+  # Mindestabstand zwischen zwei rohen Impulsen (Sekunden)
+  kalman_kick_holdoff_s: 0.2
+  # HPSS-Bestätigungs-Gate: ein Impuls muss zusätzlich perkussiv (statt
+  # harmonisch/Bassline-artig) aussehen, um akzeptiert zu werden - höher =
+  # strenger (weniger Fehltrigger von tiefen Bassnoten/anderer tieffrequenter
+  # Percussion), aber auch anfälliger echte, leisere Kicks zu verpassen.
+  kalman_kick_hpss_std_factor: 1.0
+  # Prozessrauschen: wie viel Unsicherheit pro Beat in Zeit/Phase (s²)
+  # bzw. Tempo/Periode (s²) angenommen wird - höher = reagiert schneller
+  # auf echte Tempo-Änderungen, aber auch anfälliger für Jitter.
+  kalman_q_time: 0.0004
+  kalman_q_period: 0.00002
+  # Messrauschen: wie sehr einem einzelnen erkannten Impuls-Zeitstempel
+  # vertraut wird (s²) - höher = das Filter lässt sich weniger stark von
+  # einer einzelnen Messung beeinflussen.
+  kalman_r: 0.0009
+  # Ausreißer-Ablehnung: ein Impuls wird ignoriert (keine Korrektur), wenn
+  # sein Fehler mehr als das Vielfache der aktuellen Unsicherheit beträgt
+  # (z.B. eine Bassline statt einem echten Kick)
+  kalman_outlier_gate: 3.0
+
+  # --- Runde 2 (2026-09-22): optionaler kick-eigener HPSS-Kernel ---
+  # Der geteilte HPSS-Kernel oben (17 Bins, gemeinsam mit Snare/Clap
+  # genutzt) reicht ±86Hz - im 9-Bin-Kick-Band (30-120Hz, gemessen bei
+  # 10.77Hz/Bin) deckt das praktisch die ganze Bandbreite ab und reicht am
+  # oberen Rand schon fast bis an die Snare-Body-Untergrenze (200Hz) heran.
+  # None (Standard) = unverändert der geteilte Kernel; eine Zahl aktiviert
+  # eine EIGENE, kleinere Perkussions-Maske nur fürs Kick-Band, ohne den
+  # geteilten Kernel für Snare/Clap anzufassen. Muss ungerade sein (wird bei
+  # gerader Eingabe automatisch +1 korrigiert). Ausprobieren z.B. mit 7.
+  kick_hpss_freq_kernel_bins: null
+
+  # --- Runde 2 (2026-09-22): 808/Bassline-Analyse (Kick) ---
+  # Rein additiv, per Default AUS - erzeugt nur Debug-Daten (siehe
+  # BeatDetector.kick_debug), solange enabled=false. NIE eine harte
+  # Ablehnung wie ein starres Pitch-Stabilitäts-Filter: die drei Signale
+  # unten (Dauer, Abklingverhalten, Tonhöhen-Drift) fließen gemeinsam in
+  # einen weichen Bassline-Score, der die Confidence senkt statt einzeln zu
+  # entscheiden. Erst mit echten House-/Rap-808-/Latino-Aufnahmen kalibrieren
+  # (siehe tools/analyze_wav.py), bevor das im Club scharf geschaltet wird.
+  kick_bassline_suppression_enabled: false
+  # Ab wie langer ununterbrochener Schwellenüberschreitung ein Treffer als
+  # "hält zu lange" gilt (Sekunden)
+  kick_bassline_duration_threshold_s: 0.35
+  # Abklingverhältnis (Hüllkurve ~150ms nach dem Treffer / Peak) oberhalb
+  # dessen ein Treffer als "klingt nicht wie ein Kick ab" gilt
+  kick_bassline_decay_threshold: 0.6
+  # Centroid-Drift zwischen zwei Blöcken (Hz) unterhalb dessen der Ton als
+  # tonhöhen-stabil (bassline-typisch) gilt
+  kick_pitch_drift_threshold: 15.0
+  # Wie stark ein voll "bassline"-bewerteter Treffer die Confidence maximal
+  # senken darf (0 = kein Effekt, 1 = kann auf 0 sinken)
+  kick_bassline_penalty: 0.5
+  # Nur wirksam wenn kick_bassline_suppression_enabled=true
+  kick_bassline_min_confidence: 0.3
+
+  # --- Runde 5 (2026-09-22): Sharpness/HPSS-Timing-Diagnose ---
+  # Default AUS. Protokolliert pro Kick-KANDIDAT (Envelope über Basis-
+  # Schwelle, nicht pro Block) eine Diagnosezeile mit HPSS-Energie bei
+  # +0/20/40/60/80ms - reiner Seitenkanal via BeatDetector.kick_gate_debug_
+  # rows, ändert nichts an der Trigger-Entscheidung.
+  kick_gate_debug: true
+
+  # --- Stabilisierung ---
+  # EMA-Glättungsfaktor α (0 = eingefroren, 1 = sofort reagierend)
+  smoothing: 0.2
+  # Mindeständerung in BPM, ab der der EMA reagiert (Hysterese gegen Zittern)
+  hysteresis: 1.0
+
+  # --- Tempo-Hold / Lock ---
+  # Mindest-Confidence um den ersten Lock zu setzen (searching → locked)
+  lock_confidence_min: 0.3
+  # Höhere Confidence-Hürde für einen Relock (verhindert Fehlsprünge)
+  relock_confidence_min: 0.5
+  # Sprünge ≤ max_jump_bpm werden direkt per EMA absorbiert (locked bleibt)
+  # Von 10.0 auf 4.0 runtergesetzt (2026-09-23): bei 10.0 wurde ein echter,
+  # dauerhafter Sprung (z.B. 104.2 -> 97.0, Differenz 7.2 BPM) fälschlich
+  # als Messrauschen abgetan und NIE als Relock-Kandidat verfolgt -
+  # locked_bpm blieb beliebig lange auf dem falschen Wert eingefroren,
+  # obwohl corrected_bpm die ganze Zeit korrekt den neuen Wert zeigte.
+  max_jump_bpm: 4.0
+  # Sprünge > hard_block_jump_bpm werden komplett ignoriert (kein Relock)
+  # Für Sprünge dazwischen gilt: erst Relock-Bestätigung abwarten
+  # (2026-09-23: bei der Extraktion nach tempo_counter.py festgestellt,
+  # dass dieser Wert vorher aus der Config gelesen, aber NIRGENDS
+  # ausgewertet wurde - totes Config-Feld. Jetzt tatsächlich wirksam,
+  # siehe TempoCounter._apply_lock.)
+  # 15.0 war viel zu niedrig - live im Club blockte das einen echten,
+  # normalen Songwechsel (130.8 -> ~90 BPM, Differenz ~40) für immer,
+  # obwohl corrected_bpm über viele Sekunden konsistent den neuen Wert
+  # zeigte. Der bpm_min/bpm_max-Bereich (70-180) spannt 110 BPM auf -
+  # ein Songwechsel kann locker 40-60 BPM Differenz haben, das ist
+  # normal, kein Messfehler. Auf 60.0 hochgesetzt: fängt noch echte
+  # Ausreißer (Autokorrelation komplett daneben) ab, blockt aber keinen
+  # plausiblen Songwechsel mehr - large_jump_bpm/large_jump_hold_s
+  # bleiben die eigentliche Bremse für große, aber echte Sprünge.
+  hard_block_jump_bpm: 60.0
+  # Wie viele aufeinanderfolgende Analysefenster (~1 s je) ein Kandidat
+  # stabil sein muss, bevor locked_bpm wechselt
+  relock_windows: 3
+  # Wie viele Sekunden Low-Confidence toleriert werden, bevor der Lock
+  # aufgegeben und in "searching" gewechselt wird
+  hold_seconds: 8.0
+
+  # --- Große BPM-Sprünge ---
+  # Sprünge > large_jump_bpm müssen large_jump_hold_s Sekunden
+  # stabil erkannt werden bevor locked_bpm übernommen wird
+  # (2026-09-23: zweiter Bug bei der Extraktion gefunden - diese Mindest-
+  # dauer wurde vorher nur beim ERSTEN Fenster eines Relock-Versuchs
+  # geprüft, nicht mehr in den folgenden. Bei kleinem relock_windows
+  # konnte ein großer Sprung so schon vor Ablauf von large_jump_hold_s
+  # durchrutschen. Jetzt bei jedem Fenster geprüft, siehe
+  # tests/test_tempo_counter.py::LargeJumpHoldTests.)
+  large_jump_bpm: 20.0
+  large_jump_hold_s: 5.0
+
+link:
+  # Ableton Link Integration aktivieren (benötigt Node.js + npm install im link/-Ordner)
+  # Aus 2026-09-22: djay Pro liefert bereits ein sauberes Tempo in dieselbe
+  # Link-Session - bpmdetects eigene (unzuverlässigere) Audio-Schätzung
+  # pusht sonst dagegen und erzeugt periodisches Drift+Reset im Timing
+  # (siehe link_sound_flash-Test). Noch keine automatische numPeers-
+  # Umschaltung gebaut (geplant, siehe Memory) - bis dahin manuell aus,
+  # wenn eine externe Quelle (djay Pro/Carabiner) verfügbar ist, manuell
+  # an bei reinen Vinyl-Abenden ohne externe Quelle.
+  # Für Beobachtungstest (2026-09-22) auf true gesetzt - siehe mode/
+  # beat_grid.enabled unten, gemeinsam für den Link-Beat-Eingangsmodus.
+  enabled: true
+
+  # Beat-Quantum (Anzahl Schläge pro Loop/Phase-Zyklus)
+  # 4 = typisch für 4/4-Takt; 2 = Half-Time; 8 = Doppel-Loop
+  quantum: 4
+
+  # Minimaler Abstand zwischen zwei Tempo-Updates an Link (Millisekunden).
+  # Verhindert dass schnelle BPM-Schwankungen als Tempo-Änderungen in Link ankommen.
+  update_interval_ms: 200
+
+  # Mindest-BPM-Änderung damit ein neues Tempo an Link exportiert wird.
+  # Koppelt mit der Hysterese der Beat-Detection — verhindert Jitter.
+  tempo_hysteresis: 0.5
+
+  # Wie oft bridge.js (Node) den Link-State pusht (Millisekunden) - bestimmt
+  # die Zeitgenauigkeit von beat_kick (siehe beat_grid unten). Vorher fest
+  # 100ms, jetzt konfigurierbar. Der Scheduler feuert nur auf einen neuen
+  # ganzzahligen Beat, ein schnellerer Push erzeugt also keine doppelten
+  # Events, nur eine feinere Auflösung.
+  push_interval_ms: 25
+
+  # Schlanke Debug-Zeile nach stderr, höchstens einmal pro tatsächlichem
+  # beat_kick (nicht pro Block/State-Push) - für einen sichtbaren
+  # Beobachtungstest, bevor Grand Vision/dmxEngine.js angefasst wird.
+  # Default aus, ändert nichts an Scheduler-Verhalten oder Payload.
+  debug_beats: true
+
+  # --- Runde (2026-09-22): Ableton-Link-Beat-Eingangsmodus ---
+  # output (Default) = bisheriges Verhalten unverändert: bpmdetects eigene
+  # Audio-Tempo-/Phasenschätzung wird in die Link-Session geschrieben, Link
+  # dient nur der Terminal-Anzeige. input = NEU: Link wird als externe
+  # Taktquelle gelesen, es wird NICHT mehr zurückgeschrieben (verhindert das
+  # oben beschriebene Drift+Reset-Problem strukturell, statt es nur manuell
+  # zu vermeiden). disabled = wie enabled=false.
+  mode: "input"
+
+  # Rein additiv, Default AUS - solange beat_grid.enabled=false ist das
+  # gesamte Verhalten (auch bei enabled=true/mode=input) exakt wie vorher.
+  # Erzeugt aus dem Ableton-Link-Beat-Zähler ein diskretes beat_kick-Ereignis
+  # (siehe beat_scheduler.py) - ersetzt NICHT die Audio-Kick-Erkennung
+  # (kickTrigger bleibt unverändert bestehen), sondern ergänzt ein
+  # unabhängiges, zusätzliches Feld (beatKick) im Sound-to-Light-Payload.
+  beat_grid:
+    enabled: true
+    # Aktuell einzig unterstützter Wert.
+    kick_source: "link"
+    # 2026-09-23 wieder auf false: Audio-Fallback existiert (siehe
+    # beat_scheduler.py), aber explizite User-Entscheidung nach dem
+    # Live-Test heute Abend - Ableton Link folgt Tempo-/Pitch-Änderungen
+    # sofort (DJ-Software meldet's direkt), die Audio-Autokorrelation ist
+    # dagegen bewusst träge (die ganze Lock/Hysterese-Logik soll genau
+    # verhindern, dass sie schnellen/falschen Änderungen hinterherspringt)
+    # - für Echtzeit-Tempo-Verfolgung strukturell ungeeignet. Nur noch
+    # Link, kein Audio-Fallback mehr.
+    fallback_to_audio: false
+
+soundlight:
+  # Sound-to-Light aktivieren: schickt Kick/Snare/Hihat-Energie per HTTP an
+  # Grand Vision (dessen Effekt-Engine kann sie z.B. für sound_pulse /
+  # sound_color_bands nutzen). Unabhängig von der Link-Integration oben.
+  enabled: true
+
+  # Ziel-URL von Grand Vision. Detector und Grand Vision laufen jetzt beide
+  # auf dem Mac Mini (autarke Instanz, siehe Memory) - localhost reicht.
+  url: "http://localhost:3005/api/soundlight/levels"
+
+  # Wie oft gesendet wird (Millisekunden). 33 ms entspricht Grand Visions
+  # eigener Update-Rate (~30fps) - schneller senden bringt nichts.
+  update_interval_ms: 33
+
+# --- Live-Monitoring/Logging (Runde 3, 2026-09-22) ---
+# Für die Live-Validierung mit echtem Audio vom REV7/BlackHole statt
+# WAV-Dateien (siehe tools/analyze_wav.py für Offline-Analyse). Rein
+# additiv/optional, Default AUS - läuft komplett unabhängig von der
+# normalen Terminal-Anzeige (BpmDisplay) in einem eigenen Hintergrund-
+# Thread, blockiert nie den Audio-Callback (siehe live_monitor.py).
+# Schreibt in eine Log-Datei statt ins Terminal, damit es nicht mit dem
+# ANSI-Redraw der Terminal-Anzeige kollidiert - mit `tail -f <log_path>`
+# in einem zweiten Terminal/Tab mitlesen.
+live_monitor:
+  enabled: true
+  # Max. Aktualisierungen der periodischen Status-Zeile pro Sekunde
+  # (Kick-/Snare-/Clap-Events selbst werden unabhängig davon sofort
+  # geloggt, sobald sie feuern - siehe Moduldoku).
+  refresh_hz: 5.0
+  # Wie viele Sekunden Debug-Events im Speicher gehalten werden, für einen
+  # per Marker gespeicherten Ausschnitt (siehe mark()/SIGUSR1 unten).
+  history_s: 60.0
+  log_path: "logs/live_monitor.log"
+  # Optional: zusätzlich jede Kick-/Snare-/Clap-Zeile strukturiert in eine
+  # CSV schreiben (für spätere Auswertung/Tabellen). null = aus.
+  csv_path: null
+  # 'm' + Enter im Terminal speichert einen Marker (letzte history_s
+  # Sekunden als JSON) - funktioniert nur bei interaktivem Terminal
+  # (sys.stdin.isatty()), sonst automatisch aus. `kill -USR1 <pid>`
+  # funktioniert immer, auch headless/über SSH.
+  keyboard_marker: true

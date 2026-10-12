@@ -9,13 +9,26 @@
  *     {"type":"get_state"}
  *     {"type":"quit"}
  *
- *   Node → Python (stdout, auch periodisch alle 100 ms):
+ *   Node → Python (stdout, periodisch alle PUSH_INTERVAL_MS, siehe unten):
  *     {"type":"state","tempo":128.0,"phase":0.75,"beat":3.0,"peers":1,"quantum":4}
  *
  *   Node → Python (stderr, einmalig):
  *     {"type":"ready","tempo":120.0}
  *     {"type":"error","msg":"..."}
+ *
+ * Push-Intervall (Runde: Link-Beat-Eingangsmodus, 2026-09-22): konfigurierbar
+ * über den ersten CLI-Arg (Millisekunden), Default 25ms (vorher fest 100ms) -
+ * siehe LinkBridge.__init__(push_interval_ms=...) auf der Python-Seite, das
+ * diesen Wert beim Subprocess-Start übergibt. Bestimmt die maximale
+ * Zeitgenauigkeit von beat_kick-Ereignissen (siehe beat_scheduler.py) - der
+ * Python-Scheduler feuert nur auf einen NEUEN ganzzahligen "beat"-Wert,
+ * nicht auf jeden Push, daher erzeugt ein schnelleres Push-Intervall keine
+ * doppelten Events, nur eine feinere zeitliche Auflösung.
  */
+const PUSH_INTERVAL_MS = (() => {
+  const arg = parseInt(process.argv[2], 10);
+  return Number.isFinite(arg) && arg > 0 ? arg : 25;
+})();
 
 // ── Laden ──────────────────────────────────────────────────────────────────
 
@@ -70,11 +83,11 @@ function snapshot() {
   };
 }
 
-// ── Periodischer State-Push an Python (10 Hz) ─────────────────────────────
+// ── Periodischer State-Push an Python (Default 40 Hz, siehe PUSH_INTERVAL_MS oben) ──
 
 const pushInterval = setInterval(() => {
   process.stdout.write(JSON.stringify(snapshot()) + '\n');
-}, 100);
+}, PUSH_INTERVAL_MS);
 
 // ── Befehle von Python (stdin) ────────────────────────────────────────────
 
@@ -115,4 +128,4 @@ rl.on('close', () => {
 
 // ── Ready-Signal ──────────────────────────────────────────────────────────
 
-process.stderr.write(JSON.stringify({ type: 'ready', tempo: getTempo() }) + '\n');
+process.stderr.write(JSON.stringify({ type: 'ready', tempo: getTempo(), pushIntervalMs: PUSH_INTERVAL_MS }) + '\n');

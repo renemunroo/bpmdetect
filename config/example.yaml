@@ -42,6 +42,10 @@ bpm:
   # Hi-Hat / Cymbal: hohe Transienten
   hihat_lo: 2000.0
   hihat_hi: 8000.0
+  # Clap: breitbandiger Knack, füllt die Lücke zwischen Snare und Hi-Hat.
+  # Eigenes viertes Band nur fürs Sound-to-Light (kein Tempo-Gewicht).
+  clap_lo: 700.0
+  clap_hi: 3000.0
 
   # --- Mischgewichte für die kombinierte OSS ---
   # Kick dominiert, da Kick-Periodizität am stabilsten für Tempo-Tracking ist.
@@ -104,3 +108,17 @@ link:
   # Mindest-BPM-Änderung damit ein neues Tempo an Link exportiert wird.
   # Koppelt mit der Hysterese der Beat-Detection — verhindert Jitter.
   tempo_hysteresis: 0.5
+
+soundlight:
+  # Sound-to-Light aktivieren: schickt Kick/Snare/Hihat-Energie per HTTP an
+  # Grand Vision (dessen Effekt-Engine kann sie z.B. für sound_pulse /
+  # sound_color_bands nutzen). Unabhängig von der Link-Integration oben.
+  enabled: true
+
+  # Ziel-URL von Grand Vision. Läuft der Detector auf derselben Maschine wie
+  # Grand Vision (üblicher Fall bei einem Show-Laptop), bleibt localhost.
+  url: "http://localhost:3005/api/soundlight/levels"
+
+  # Wie oft gesendet wird (Millisekunden). 33 ms entspricht Grand Visions
+  # eigener Update-Rate (~30fps) - schneller senden bringt nichts.
+  update_interval_ms: 33
