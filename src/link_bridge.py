@@ -64,10 +64,16 @@ class LinkBridge:
         quantum: int = 4,
         update_interval_ms: float = 200.0,
         tempo_hysteresis: float = 0.5,
+        push_interval_ms: float = 25.0,
     ) -> None:
         self._quantum = quantum
         self._update_interval = update_interval_ms / 1000.0
         self._tempo_hysteresis = tempo_hysteresis
+        # Wie oft bridge.js den State pusht (Node-seitiger setInterval) -
+        # vorher fest 100ms, jetzt konfigurierbar (Default 25ms) für
+        # beat_kick-Zeitgenauigkeit, siehe beat_scheduler.py. Wird beim
+        # Subprocess-Start als CLI-Arg an bridge.js übergeben.
+        self._push_interval_ms = push_interval_ms
 
         self._lock = threading.Lock()
         self._session_tempo: float = 0.0
@@ -97,7 +103,7 @@ class LinkBridge:
 
         try:
             self._proc = subprocess.Popen(
-                [node, str(_BRIDGE_SCRIPT)],
+                [node, str(_BRIDGE_SCRIPT), str(int(self._push_interval_ms))],
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -214,6 +220,14 @@ class LinkBridge:
         """Link-Phase 0..1."""
         with self._lock:
             return self._link_phase
+
+    @property
+    def link_beat(self) -> float:
+        """Fortlaufender Ableton-Link-Beat-Zähler (steigt kontinuierlich,
+        kein Bar-/Quantum-Bezug) - für beat_scheduler.py, das daraus
+        diskrete beat_kick-Ereignisse ableitet."""
+        with self._lock:
+            return self._link_beat
 
     # ── Interne Hilfsmethoden ────────────────────────────────────────────────
 

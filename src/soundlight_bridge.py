@@ -1,133 +1,152 @@
-"""Soundlight-Brücke — pusht BeatDetector-Werte per HTTP an aura-lc.
+"""Sound-to-Light Bridge — schickt Kick/Snare/Hihat-Werte an Grand Vision.
 
-aura-lc (server.js, POST /api/soundlight/levels -> engine.setSoundLevels())
-erwartet ein JSON-Objekt mit (siehe dort, src/dmxEngine.js):
-  kick/snare/hihat/clap   sustained Energie 0..1
-  level                   Breitband-RMS 0..1 (hier NICHT geliefert - siehe
-                          unten, kein entsprechender Messwert vorhanden)
-  kickHit/snareHit/hihatHit/clapHit   transiente Onset-Stärke 0..1
-  kickTrigger/snareTrigger/clapTrigger  saubere Ein-Block-Ereignisse
-  phase/beatKick/beatInBar  aus Link abgeleitet (hier NICHT geliefert -
-                          bpmdetect hat kein beat_scheduler.py-Äquivalent)
-  bpm                     BeatDetector.locked_bpm
+Läuft in einem eigenen Hintergrund-Thread mit fixem Intervall, nie aus dem
+Audio-Callback heraus: ein langsamer/fehlschlagender HTTP-Request darf nie
+zu Audio-Dropouts führen (gleiches Prinzip wie link_bridge.py).
 
-bpmdetect kennt kein Clap-Band und keine Breitband-RMS (die Terminal-
-Anzeige nutzt dBFS, kein 0..1-Peak-Pegel) - `clap`/`clapHit`/`clapTrigger`/
-`level`/`phase`/`beatKick`/`beatInBar` werden deshalb bewusst NICHT
-mitgeschickt statt erfunden zu werden; der Server setzt dafür seine
-eigenen, dokumentierten Defaults (0/false, siehe setSoundLevels()).
+Schickt pro Band ZWEI Werte, für unterschiedliche Lichteffekte:
+  - kick/snare/hihat: andauernde Energie, peak-normalisiert (0..1ish) - für
+    VU-Meter-artige Effekte, die der Lautstärke kontinuierlich folgen sollen.
+  - kickHit/snareHit/hihatHit: Transienten-Stärke (siehe onset_scores in
+    BeatDetector), schon 0..1-normiert - für Effekte, die auf echte Treffer
+    reagieren sollen statt auf eine durchlaufende Basslinie/Gesang im
+    selben Frequenzband.
+Zusätzlich `level`: peak-normalisierte Broadband-Lautstärke (RMS des ganzen
+Mixes, kein Frequenzband) - für einen VU-Meter-Effekt, der sich wie
+Gesamtlautstärke anfühlt statt wie ein einzelnes Drum-Band.
 
-Der HTTP-POST läuft NIE auf dem Audio-Callback-Thread (sounddevice ruft
-on_block() dort auf, ein blockierender Netzwerk-Call dort riskiert Audio-
-Dropouts) - update() reiht nur eine Queue-Operation ein (Queue-Größe 1:
-ein wartender, noch nicht gesendeter Payload wird durch einen neueren
-ersetzt statt sich aufzustauen), ein einzelner Hintergrund-Thread sendet.
+Außerdem `kickTrigger`/`snareTrigger`/`clapTrigger`: saubere boolesche
+Ein-Block-Ereignisse (adaptive Schwelle, Hold-off/Cooldown) statt der
+abklingenden Hit-Werte - für Effekte, die auf einen klaren, einmaligen
+Trigger statt auf eine 0..1-Pulskurve reagieren sollen.
+
+Optional (Ableton-Link-Beat-Eingangsmodus, siehe beat_scheduler.py):
+`beatKick` - Ein-Block-Ereignis aus dem externen Ableton-Link-Beat-Zähler
+statt der Audio-Kick-Erkennung, `beatInBar` - Position 1..quantum im Takt.
+Nur befüllt wenn ein beat_scheduler übergeben wurde, sonst immer False/0 -
+ändert nichts an kickTrigger/etc., die weiterhin aus der Audio-Erkennung
+kommen.
+
+Außerdem `bpm`: bpmdetects eigene Audio-BPM-Schätzung (BeatDetector.locked_bpm,
+sonst .bpm als Näherung), unabhängig von Ableton Link - für Grand Vision als
+Tempo-Referenz, wenn Links Session gerade keine echte externe Quelle hat
+(siehe fallback_to_audio in beat_scheduler.py).
 """
 
 import json
-import queue
-import sys
 import threading
-import time
 import urllib.error
 import urllib.request
-from typing import Optional
-
-_SEND_TIMEOUT_S = 1.0
 
 
 class SoundlightBridge:
-    """Pusht BeatDetector-Werte periodisch an aura-lcs /api/soundlight/levels.
-
-    Thread-Sicherheit: update() darf aus dem Audio-Callback aufgerufen
-    werden (reiht nur ein, blockiert nie auf Netzwerk-I/O).
-    """
-
-    def __init__(self, url: str, update_interval_ms: float = 50.0) -> None:
+    def __init__(self, detector, url: str, interval_ms: float = 33.0, beat_scheduler=None) -> None:
+        self._detector = detector
         self._url = url
-        self._update_interval = update_interval_ms / 1000.0
-        self._last_send_t: float = 0.0
-
-        self._queue: "queue.Queue[Optional[dict]]" = queue.Queue(maxsize=1)
-        self._thread: Optional[threading.Thread] = None
+        self._interval = interval_ms / 1000.0
         self._running = False
+        self._thread = None
+        self._peak = {"kick": 1e-9, "snare": 1e-9, "hihat": 1e-9, "clap": 1e-9, "level": 1e-9}
+        # Optional: LinkBeatScheduler (beat_scheduler.py) - liefert beatKick/
+        # beatInBar aus Ableton Link statt der Audio-Kick-Erkennung. None
+        # (Default) = rückwärtskompatibel, Felder bleiben False/0, exakt wie
+        # vor dieser Ergänzung.
+        self._beat_scheduler = beat_scheduler
+        # Sofort-Trigger für beat_kick statt auf den nächsten Timer-Tick zu
+        # warten (siehe notify_beat_kick) - live beobachtet: der normale
+        # ~33ms-Intervall-Loop allein addiert sich mit push_interval_ms und
+        # Grand Visions eigenem DMX-Tick zu spürbarem Nachlaufen.
+        self._wake_event = threading.Event()
 
-    def start(self) -> bool:
-        if not self._url:
-            _warn("Keine URL konfiguriert (soundlight.url) — Brücke bleibt aus.")
-            return False
+    def start(self) -> None:
         self._running = True
-        self._thread = threading.Thread(target=self._sender_loop, daemon=True, name="soundlight-sender")
+        self._thread = threading.Thread(target=self._loop, daemon=True, name="soundlight-bridge")
         self._thread.start()
-        return True
+
+    def notify_beat_kick(self) -> None:
+        """Vom Audio-Callback-Thread aufzurufen (run_bpm's on_block, direkt
+        nach beat_scheduler.update()), wenn ein Beat erkannt wurde - weckt
+        den Sende-Thread sofort statt bis zu einem vollen update_interval_ms
+        zu warten. Nur ein event.set(), kein I/O, blockiert nie."""
+        self._wake_event.set()
 
     def stop(self) -> None:
         self._running = False
-        try:
-            self._queue.put_nowait(None)  # weckt den wartenden Thread zum Beenden
-        except queue.Full:
-            pass
-        if self._thread:
-            self._thread.join(timeout=2)
 
-    def update(self, detector, now: Optional[float] = None) -> None:
-        """Soll periodisch (z.B. aus on_block) aufgerufen werden - rate-
-        limitiert selbst auf update_interval_ms, günstig genug für jeden
-        Block-Aufruf."""
-        t = now if now is not None else time.time()
-        if (t - self._last_send_t) < self._update_interval:
-            return
-        self._last_send_t = t
+    def _build_payload(self) -> bytes:
+        """Baut die JSON-Payload aus dem aktuellen Detector-Zustand - aus
+        _loop() herausgezogen, damit sie ohne Thread/HTTP isoliert testbar
+        ist (siehe tests/test_triggers.py)."""
+        kick, snare, hihat, clap = self._detector.band_scores
+        raw = {"kick": kick, "snare": snare, "hihat": hihat, "clap": clap, "level": self._detector.overall_score}
+        for band, val in raw.items():
+            self._peak[band] = max(val, self._peak[band] * 0.999)
 
-        kick, snare, hihat = (
-            detector.band_scores_normalized()[b] for b in ("kick", "snare", "hihat")
-        )
-        hits, triggers = detector.pop_hits()
+        kick_hit, snare_hit, hihat_hit, clap_hit = self._detector.onset_scores
 
-        payload = {
-            "kick": kick,
-            "snare": snare,
-            "hihat": hihat,
-            "kickHit": hits["kick"],
-            "snareHit": hits["snare"],
-            "hihatHit": hits["hihat"],
-            "kickTrigger": triggers["kick"],
-            "snareTrigger": triggers["snare"],
-            "bpm": detector.locked_bpm,
-        }
-        try:
-            self._queue.put_nowait(payload)
-        except queue.Full:
-            # Ein noch nicht gesendeter, älterer Payload wird verworfen -
-            # der neue ist aktueller und wichtiger als der alte.
-            try:
-                self._queue.get_nowait()
-            except queue.Empty:
-                pass
-            try:
-                self._queue.put_nowait(payload)
-            except queue.Full:
-                pass
+        return json.dumps({
+            "kick": round(raw["kick"] / self._peak["kick"], 4),
+            "snare": round(raw["snare"] / self._peak["snare"], 4),
+            "hihat": round(raw["hihat"] / self._peak["hihat"], 4),
+            "clap": round(raw["clap"] / self._peak["clap"], 4),
+            "level": round(raw["level"] / self._peak["level"], 4),
+            "kickHit": round(kick_hit, 4),
+            "snareHit": round(snare_hit, 4),
+            "hihatHit": round(hihat_hit, 4),
+            "clapHit": round(clap_hit, 4),
+            # Saubere boolesche Events (Mean+StdDev-Schwelle, Snare-
+            # Koinzidenz, Hold-off) statt der obigen abklingenden
+            # 0..1-Werte - siehe BeatDetector.kick_trigger/snare_trigger/
+            # clap_trigger. Rueckwaertskompatibel ergaenzt: bestehende
+            # Felder (kickTrigger/snareTrigger) unveraendert, clapTrigger
+            # ist ein reiner Zusatz, kein Ersatz-Eventformat.
+            "kickTrigger": self._detector.kick_trigger,
+            "snareTrigger": self._detector.snare_trigger,
+            "clapTrigger": self._detector.clap_trigger,
+            "phase": round(self._detector.beat_phase, 4),
+            # Ableton-Link-Beat-Eingangsmodus (beat_scheduler.py) - rein
+            # additiv, rückwärtskompatibel: ohne beat_scheduler immer
+            # False/0, ändert nichts an kickTrigger/etc. aus der
+            # Audio-Erkennung, die unverändert weiterläuft.
+            # consume_beat_kick() statt der beat_kick-Property: drain-on-read,
+            # damit dieses ~33ms-Poll-Intervall keinen Beat verpasst, der nur
+            # für einen einzelnen ~11ms-Audioblock aktiv war (siehe
+            # beat_scheduler.py) - live beobachtet, ohne das war beatKick
+            # praktisch nie True.
+            "beatKick": self._beat_scheduler.consume_beat_kick() if self._beat_scheduler else False,
+            "beatInBar": self._beat_scheduler.beat_in_bar if self._beat_scheduler else 0,
+            # Eigene Audio-BPM-Schätzung (Kalman/Autokorrelation, siehe
+            # BeatDetector.locked_bpm/.bpm) - unabhängig von Ableton Link,
+            # damit Grand Vision ein echtes Tempo hat, auch wenn Links
+            # Session gerade nur mit sich selbst spricht (siehe
+            # fallback_to_audio in beat_scheduler.py). locked_bpm ist die
+            # bestätigte/stabile Schätzung (0 bis genug Konfidenz da ist),
+            # bis dahin die laufende geglättete Schätzung als Näherung.
+            "bpm": round(self._detector.locked_bpm if self._detector.locked_bpm > 0 else self._detector.bpm, 2),
+        }).encode("utf-8")
 
-    def _sender_loop(self) -> None:
+    def _loop(self) -> None:
         while self._running:
-            try:
-                payload = self._queue.get(timeout=0.5)
-            except queue.Empty:
-                continue
-            if payload is None:
-                break
-            try:
-                req = urllib.request.Request(
-                    self._url,
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={"Content-Type": "application/json"},
-                    method="POST",
-                )
-                urllib.request.urlopen(req, timeout=_SEND_TIMEOUT_S).close()
-            except (urllib.error.URLError, OSError, TimeoutError) as e:
-                _warn(f"Push fehlgeschlagen: {e}")
+            payload = self._build_payload()
 
+            req = urllib.request.Request(
+                self._url, data=payload, method="POST",
+                headers={"Content-Type": "application/json"},
+            )
+            try:
+                urllib.request.urlopen(req, timeout=0.5)
+            except (urllib.error.URLError, OSError):
+                pass  # Grand Vision gerade nicht erreichbar - naechster Tick versucht es erneut
 
-def _warn(msg: str) -> None:
-    print(f"[soundlight] {msg}", file=sys.stderr)
+            # Wie time.sleep(self._interval), aber unterbrechbar: wenn
+            # notify_beat_kick() währenddessen aufgerufen wird, endet das
+            # Warten sofort statt erst nach dem vollen Intervall - der
+            # nächste Schleifendurchlauf sendet dann direkt (inkl. dem
+            # gerade erkannten Beat über consume_beat_kick() in
+            # _build_payload). Kein Datenverlust, falls das Event knapp
+            # nach dem Zurücksetzen erneut gesetzt wird: consume_beat_kick()
+            # bleibt unabhängig davon korrekt (siehe beat_scheduler.py) -
+            # in dem seltenen Fall wird der Beat nur nicht ganz so sofort
+            # zugestellt, nie verloren.
+            self._wake_event.wait(timeout=self._interval)
+            self._wake_event.clear()

@@ -58,12 +58,45 @@ def cmd_monitor(args: argparse.Namespace) -> None:
 def cmd_bpm(args: argparse.Namespace) -> None:
     from beat_detector import run_bpm
     cfg = cfg_mod.load(Path(args.config) if args.config else None)
+
+    # Runde 4: temporärer Override für einen A/B-Testlauf, OHNE club.yaml
+    # dauerhaft zu ändern - bpm_cfg()/live_monitor_cfg() liefern das direkt
+    # aus der Datei geladene dict, das hier NICHT mutiert wird (sonst würde
+    # ein erneutes cfg_mod.load() im selben Prozess denselben dict wieder
+    # zurückgeben - hier aber ohnehin pro Lauf ein frischer Prozess, sicherheitshalber
+    # trotzdem eine Kopie).
+    bpm_cfg = dict(cfg_mod.bpm_cfg(cfg))
+    if args.kalman_kick_std_factor is not None:
+        bpm_cfg["kalman_kick_std_factor"] = args.kalman_kick_std_factor
+        print(f"[override] kalman_kick_std_factor = {args.kalman_kick_std_factor} (club.yaml unverändert)")
+
+    live_cfg = dict(cfg_mod.live_monitor_cfg(cfg))
+    if args.label:
+        live_cfg.setdefault("enabled", True)
+        live_cfg["log_path"] = args.live_log_path or f"logs/ab_{args.label}.log"
+        live_cfg["csv_path"] = args.live_csv_path or f"logs/ab_{args.label}.csv"
+    else:
+        if args.live_log_path:
+            live_cfg["log_path"] = args.live_log_path
+        if args.live_csv_path:
+            live_cfg["csv_path"] = args.live_csv_path
+
+    link_cfg = dict(cfg_mod.link_cfg(cfg))
+    if args.link_mode:
+        if args.link_mode == "off":
+            link_cfg["enabled"] = False
+        else:
+            link_cfg["enabled"] = True
+            link_cfg["mode"] = args.link_mode
+        print(f"[override] link.mode = {args.link_mode} (club.yaml unverändert)")
+
     run_bpm(
         cfg_mod.audio_cfg(cfg),
         cfg_mod.monitor_cfg(cfg),
-        cfg_mod.bpm_cfg(cfg),
-        cfg_mod.link_cfg(cfg),
+        bpm_cfg,
+        link_cfg,
         cfg_mod.soundlight_cfg(cfg),
+        live_cfg,
     )
 
 
@@ -93,6 +126,25 @@ def main() -> None:
 
     # bpm
     p_bpm = sub.add_parser("bpm", help="Beat-Detection und BPM-Schätzung starten")
+    p_bpm.add_argument(
+        "--kalman-kick-std-factor", type=float, default=None, metavar="FACTOR",
+        help="Testweiser Override für kalman_kick_std_factor (Default aus club.yaml bleibt unverändert, "
+             "nur dieser Prozess-Lauf nutzt den neuen Wert) - für A/B-Testrunden."
+    )
+    p_bpm.add_argument(
+        "--label", default=None, metavar="NAME",
+        help="Kennzeichnung dieses Testlaufs - schreibt automatisch nach logs/ab_<NAME>.log/.csv "
+             "(aktiviert live_monitor, falls in club.yaml noch aus) statt der club.yaml-Pfade."
+    )
+    p_bpm.add_argument("--live-log-path", default=None, metavar="PATH", help="Override für live_monitor.log_path")
+    p_bpm.add_argument("--live-csv-path", default=None, metavar="PATH", help="Override für live_monitor.csv_path")
+    p_bpm.add_argument(
+        "--link-mode", choices=["input", "output", "off"], default=None, metavar="MODE",
+        help="Testweiser Override für link.mode ('off' setzt zusätzlich link.enabled=false) - "
+             "club.yaml bleibt unverändert. Für schnelles Umschalten ohne Config-Edit, z.B. wenn "
+             "keine echte externe Link-Quelle da ist und bpmdetects eigener Link-Peer nur mit "
+             "einem anderen lokalen Prozess (Grand Vision) auf ein Fake-Tempo einrastet."
+    )
     p_bpm.set_defaults(func=cmd_bpm)
 
     args = parser.parse_args()

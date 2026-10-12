@@ -42,6 +42,10 @@ bpm:
   # Hi-Hat / Cymbal: hohe Transienten
   hihat_lo: 2000.0
   hihat_hi: 8000.0
+  # Clap: breitbandiger Knack, füllt die Lücke zwischen Snare und Hi-Hat.
+  # Eigenes viertes Band nur fürs Sound-to-Light (kein Tempo-Gewicht).
+  clap_lo: 700.0
+  clap_hi: 3000.0
 
   # --- Mischgewichte für die kombinierte OSS ---
   # Kick dominiert, da Kick-Periodizität am stabilsten für Tempo-Tracking ist.
@@ -106,17 +110,15 @@ link:
   tempo_hysteresis: 0.5
 
 soundlight:
-  # Sendet Kick/Snare/Hihat-Werte + BPM per HTTP POST an eine Licht-
-  # Steuerung (z.B. aura-lc, server.js POST /api/soundlight/levels).
-  # Läuft unabhängig von Link - betrifft nur Audio-Energie/Onset-Werte,
-  # nicht das Tempo (das läuft über die Link-Bridge oben).
-  enabled: false
+  # Sound-to-Light aktivieren: schickt Kick/Snare/Hihat-Energie per HTTP an
+  # Grand Vision (dessen Effekt-Engine kann sie z.B. für sound_pulse /
+  # sound_color_bands nutzen). Unabhängig von der Link-Integration oben.
+  enabled: true
 
-  # Ziel-URL der Licht-Steuerung, z.B. "http://localhost:3005/api/soundlight/levels"
-  url: ""
+  # Ziel-URL von Grand Vision. Läuft der Detector auf derselben Maschine wie
+  # Grand Vision (üblicher Fall bei einem Show-Laptop), bleibt localhost.
+  url: "http://localhost:3005/api/soundlight/levels"
 
-  # Mindestabstand zwischen zwei Pushes (Millisekunden). Onset-Treffer, die
-  # zwischen zwei Pushes auftreten, gehen nicht verloren (werden bis zum
-  # nächsten Push gesammelt) - dieser Wert bestimmt nur, wie oft gesendet
-  # wird, nicht die Erkennungsgenauigkeit selbst.
-  update_interval_ms: 50
+  # Wie oft gesendet wird (Millisekunden). 33 ms entspricht Grand Visions
+  # eigener Update-Rate (~30fps) - schneller senden bringt nichts.
+  update_interval_ms: 33

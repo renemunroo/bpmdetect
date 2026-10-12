@@ -46,6 +46,14 @@ class LevelMeter:
         clip_marker = " CLIP" if clip else "     "
         return f"[{bar}]{clip_marker} {db:+6.1f} dBFS"
 
+    def current_dbfs(self) -> float:
+        """Aktueller kombinierter Pegel (lauterer der beiden Kanäle) in
+        dBFS - für externe Konsumenten wie live_monitor.py, die nicht die
+        ganze ASCII-Balkenanzeige brauchen."""
+        with self._lock:
+            rms = max(self._rms_l, self._rms_r)
+        return self._db(rms)
+
     def render(self) -> str:
         with self._lock:
             db_l = self._db(self._rms_l)

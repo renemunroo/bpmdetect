@@ -29,3 +29,7 @@ def link_cfg(cfg: dict) -> dict:
 
 def soundlight_cfg(cfg: dict) -> dict:
     return cfg.get("soundlight", {})
+
+
+def live_monitor_cfg(cfg: dict) -> dict:
+    return cfg.get("live_monitor", {})
