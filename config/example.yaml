@@ -104,3 +104,19 @@ link:
   # Mindest-BPM-Änderung damit ein neues Tempo an Link exportiert wird.
   # Koppelt mit der Hysterese der Beat-Detection — verhindert Jitter.
   tempo_hysteresis: 0.5
+
+soundlight:
+  # Sendet Kick/Snare/Hihat-Werte + BPM per HTTP POST an eine Licht-
+  # Steuerung (z.B. aura-lc, server.js POST /api/soundlight/levels).
+  # Läuft unabhängig von Link - betrifft nur Audio-Energie/Onset-Werte,
+  # nicht das Tempo (das läuft über die Link-Bridge oben).
+  enabled: false
+
+  # Ziel-URL der Licht-Steuerung, z.B. "http://localhost:3005/api/soundlight/levels"
+  url: ""
+
+  # Mindestabstand zwischen zwei Pushes (Millisekunden). Onset-Treffer, die
+  # zwischen zwei Pushes auftreten, gehen nicht verloren (werden bis zum
+  # nächsten Push gesammelt) - dieser Wert bestimmt nur, wie oft gesendet
+  # wird, nicht die Erkennungsgenauigkeit selbst.
+  update_interval_ms: 50

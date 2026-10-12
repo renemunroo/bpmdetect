@@ -156,6 +156,32 @@ class BeatDetector:
         self._last_onset_t: float = 0.0
         self._last_beat_t: float = 0.0
 
+        # Pro-Band-Onset-Erkennung (für die soundlight-Brücke, siehe
+        # soundlight_bridge.py) - dieselbe Methode wie oben für die
+        # kombinierte Beat-Phase (Flux über lokalem Mittel + Refraktärzeit),
+        # nur pro Band statt auf dem kombinierten OSS. `_hit_pending`
+        # latcht die Treffer-Stärke zwischen zwei Bridge-Pushes (die
+        # Push-Rate ist niedriger als die Block-Rate) - pop_hits() liest
+        # und löscht sie atomar, damit kein Treffer zwischen zwei Pushes
+        # verloren geht.
+        band_short_len = max(8, int(0.5 / self._hop))
+        self._band_flux_short = {
+            "kick": deque(maxlen=band_short_len),
+            "snare": deque(maxlen=band_short_len),
+            "hihat": deque(maxlen=band_short_len),
+        }
+        self._last_band_onset_t = {"kick": 0.0, "snare": 0.0, "hihat": 0.0}
+        self._hit_pending = {"kick": 0.0, "snare": 0.0, "hihat": 0.0}
+        self._trigger_pending = {"kick": False, "snare": False, "hihat": False}
+        # Langsam-zerfallender Peak pro Band (gleiche Methode/Decay-Konstante
+        # wie BpmDisplay._peak_kick/.../render() weiter unten, nur hier
+        # bereits in BeatDetector selbst statt nur in der Anzeige - normiert
+        # die unskalierten Flux-Rohwerte (kick_f/snare_f/hihat_f, beliebige
+        # Größenordnung je nach Eingangspegel/FFT-Größe) auf 0..1 für die
+        # soundlight-Brücke. Eigener Zustand, nicht derselbe wie
+        # BpmDisplay's - beide dürfen unabhängig laufen.
+        self._band_peak = {"kick": 1e-12, "snare": 1e-12, "hihat": 1e-12}
+
         # Geschützter Zustand
         self._lock = threading.Lock()
         self._bpm_raw: float = 0.0
@@ -196,6 +222,29 @@ class BeatDetector:
             self._kick_score  = a * kick_f  + (1 - a) * self._kick_score
             self._snare_score = a * snare_f + (1 - a) * self._snare_score
             self._hihat_score = a * hihat_f + (1 - a) * self._hihat_score
+
+            self._band_peak["kick"]  = max(self._kick_score,  self._band_peak["kick"]  * 0.999)
+            self._band_peak["snare"] = max(self._snare_score, self._band_peak["snare"] * 0.999)
+            self._band_peak["hihat"] = max(self._hihat_score, self._band_peak["hihat"] * 0.999)
+
+        # Pro-Band-Onset-Erkennung (für kickHit/snareHit/hihatHit) - exakt
+        # dieselbe Flux-über-lokalem-Mittel + Refraktärzeit-Methode wie die
+        # kombinierte Onset-Erkennung unten, nur je Band statt auf `combined`.
+        with self._lock:
+            for band, flux in (("kick", kick_f), ("snare", snare_f), ("hihat", hihat_f)):
+                short = self._band_flux_short[band]
+                short.append(flux)
+                if len(short) < 4:
+                    continue
+                local_avg = float(np.mean(short))
+                if (
+                    flux > self._onset_threshold * local_avg
+                    and flux > 1e-9
+                    and (now - self._last_band_onset_t[band]) >= self._refractory
+                ):
+                    self._last_band_onset_t[band] = now
+                    self._hit_pending[band] = max(self._hit_pending[band], flux)
+                    self._trigger_pending[band] = True
 
         self._oss.append(combined)
         self._oss_short.append(combined)
@@ -260,6 +309,30 @@ class BeatDetector:
         """(kick_score, snare_score, hihat_score) — EMA-geglättete Flux-Energie."""
         with self._lock:
             return (self._kick_score, self._snare_score, self._hihat_score)
+
+    def band_scores_normalized(self) -> dict[str, float]:
+        """Wie band_scores(), aber relativ zum langsam-zerfallenden Peak auf
+        0..1 normiert (gleiche Methode wie BpmDisplay's Pegelleisten) - für
+        die soundlight-Brücke (siehe soundlight_bridge.py), die einen
+        0..1-Wertebereich erwartet, nicht die unskalierten Rohwerte."""
+        with self._lock:
+            scores = {"kick": self._kick_score, "snare": self._snare_score, "hihat": self._hihat_score}
+            peaks = dict(self._band_peak)
+        return {band: min(1.0, scores[band] / peaks[band]) for band in scores}
+
+    def pop_hits(self) -> tuple[dict[str, float], dict[str, bool]]:
+        """Liest die seit dem letzten Aufruf aufgelaufenen Pro-Band-Onset-
+        Treffer (0..1, relativ zum Peak normiert) und löscht sie dabei
+        atomar - verhindert, dass ein Treffer zwischen zwei (selteneren)
+        Bridge-Pushes verloren geht, weil er nicht exakt auf einen
+        Push-Block fiel. Gibt (hit_strength_by_band, triggered_by_band)."""
+        with self._lock:
+            peaks = dict(self._band_peak)
+            hits = {band: min(1.0, v / peaks[band]) for band, v in self._hit_pending.items()}
+            triggers = dict(self._trigger_pending)
+            self._hit_pending = {band: 0.0 for band in self._hit_pending}
+            self._trigger_pending = {band: False for band in self._trigger_pending}
+        return hits, triggers
 
     @property
     def locked_bpm(self) -> float:
@@ -663,7 +736,7 @@ class BpmDisplay:
 
 # ── Entry-Point ───────────────────────────────────────────────────────────────
 
-def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None) -> None:
+def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None, soundlight_cfg=None) -> None:
     device_name: str = cfg.get("device_name", "")
     fallback: bool = cfg.get("fallback_to_default", True)
     sample_rate: int = cfg.get("sample_rate", 44100)
@@ -728,6 +801,18 @@ def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None) -> None:
             print("[link] Nicht verfügbar — fahre ohne Link fort.")
             link_bridge = None
 
+    # ── Soundlight-Brücke (aura-lc) ──────────────────────────────────────────
+    soundlight_bridge = None
+    if soundlight_cfg and soundlight_cfg.get("enabled", False):
+        from soundlight_bridge import SoundlightBridge
+        sl_url = soundlight_cfg.get("url", "")
+        sl_interval_ms = soundlight_cfg.get("update_interval_ms", 50.0)
+        soundlight_bridge = SoundlightBridge(url=sl_url, update_interval_ms=sl_interval_ms)
+        if soundlight_bridge.start():
+            print(f"Soundlight   : aktiv  url={sl_url}  update={sl_interval_ms:.0f} ms")
+        else:
+            soundlight_bridge = None
+
     print("\nStrg+C zum Beenden\n")
 
     detector = BeatDetector(
@@ -763,6 +848,13 @@ def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None) -> None:
         nonlocal counter
         detector.process(block)
         display.update_meter(block)
+        # Eigene Rate-Begrenzung in SoundlightBridge.update() (siehe dort) -
+        # bewusst NICHT an refresh_every/counter gekoppelt wie link_bridge
+        # unten, damit die Push-Rate unabhängig von der Terminal-
+        # Anzeigerate bleibt (soundlight.update_interval_ms entscheidet
+        # allein).
+        if soundlight_bridge:
+            soundlight_bridge.update(detector)
         counter += 1
         if counter % refresh_every == 0:
             if link_bridge:
@@ -787,4 +879,6 @@ def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None) -> None:
         capture.stop()
         if link_bridge:
             link_bridge.stop()
+        if soundlight_bridge:
+            soundlight_bridge.stop()
         print("\n\nBeat-Detection beendet.")

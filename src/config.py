@@ -25,3 +25,7 @@ def bpm_cfg(cfg: dict) -> dict:
 
 def link_cfg(cfg: dict) -> dict:
     return cfg.get("link", {})
+
+
+def soundlight_cfg(cfg: dict) -> dict:
+    return cfg.get("soundlight", {})

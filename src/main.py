@@ -63,6 +63,7 @@ def cmd_bpm(args: argparse.Namespace) -> None:
         cfg_mod.monitor_cfg(cfg),
         cfg_mod.bpm_cfg(cfg),
         cfg_mod.link_cfg(cfg),
+        cfg_mod.soundlight_cfg(cfg),
     )
 
 
