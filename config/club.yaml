@@ -185,7 +185,24 @@ bpm:
   # Wie viel höher die Energie gerade eben sein muss als vor ~35ms - filtert
   # sanft einschwingende Bassnoten raus, die zwar laut, aber nicht scharf
   # angeschlagen sind (höher = strenger, weniger Fehltrigger von Basslines)
-  kalman_kick_sharpness_ratio: 4.0
+  #
+  # Auf 1.8 gesenkt (2026-10-13, echtes live_monitor.log vom Club-Test
+  # ausgewertet, siehe GATE_DIAG-Zeilen): 4.0 war praktisch unerreichbar -
+  # von 182 Kandidaten, die bereits die Baseline-Schwelle (kalman_kick_
+  # std_factor) überschritten hatten, erreichten nur 24 (13%) den
+  # sharpness_ratio von 4.0, Median lag bei nur 1.39. Nur 4 Kicks wurden in
+  # ~75 Sekunden echter Musik überhaupt akzeptiert - der "Blitz" im Takt kam
+  # fast ausschließlich aus der Kalman-Vorhersage (Schwungrad auf Basis
+  # veralteter/keiner echten Daten), nicht aus echter Erkennung. Die
+  # gemessenen Verhältnisse zeigen eine klare Lücke zwischen einem breiten
+  # Cluster bei ~1.0-1.8 (p75=1.80) und einzelnen sehr scharfen Treffern ab
+  # ~7.5 (p90) - 1.8 lässt das obere Viertel (die vermutlich echten,
+  # scharfen Kicks) durch und hält den breiten unteren Cluster weiterhin
+  # draußen. Nächster Test zeigt, ob das die richtige Grenze ist oder noch
+  # nachjustiert werden muss - siehe auch die offene Frage zum 400ms-
+  # Baseline-Fenster (kalman_env_win, aktuell nur im Code fest verdrahtet,
+  # siehe beat_detector.py) als möglicher zweiter Faktor.
+  kalman_kick_sharpness_ratio: 1.8
   # Mindestabstand zwischen zwei rohen Impulsen (Sekunden)
   kalman_kick_holdoff_s: 0.2
   # HPSS-Bestätigungs-Gate: ein Impuls muss zusätzlich perkussiv (statt
