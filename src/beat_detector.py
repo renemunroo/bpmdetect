@@ -168,6 +168,12 @@ class BeatDetector:
         kalman_kick_cutoff_hz: float = 130.0,
         kalman_kick_std_factor: float = 2.5,
         kalman_kick_sharpness_ratio: float = 4.0,
+        # Absolute Lautstärke-Untergrenze (dBFS) für einen Kick-Kandidaten -
+        # unabhängig von allen relativen Schwellen oben. Default -100.0 lässt
+        # praktisch jede Lautstärke durch (alte Verhalten unverändert für
+        # jeden, der das nicht konfiguriert) - siehe Konstruktor-Kommentar
+        # bei _update_kalman_kick für die Begründung.
+        kalman_kick_min_level_dbfs: float = -100.0,
         kalman_kick_holdoff_s: float = 0.2,
         kalman_kick_hpss_std_factor: float = 1.0,  # Bestätigungs-Gate: wie streng die HPSS-Perkussions-Prüfung ist (höher = strenger, mehr echte Kicks können durchfallen)
         kalman_q_time: float = 0.0004,     # Prozessrauschen: Zeit/Phase (s²) pro Beat
@@ -378,6 +384,7 @@ class BeatDetector:
         self._kalman_kick_sharpness_ratio = kalman_kick_sharpness_ratio
         self._kalman_kick_std_factor = kalman_kick_std_factor
         self._kalman_kick_noise_floor = 1e-5
+        self._kalman_kick_min_level_dbfs = kalman_kick_min_level_dbfs
         self._kalman_kick_holdoff_s = kalman_kick_holdoff_s
         self._kalman_kick_hpss_std_factor = kalman_kick_hpss_std_factor
         self._kalman_kick_freeze_s = max(kalman_kick_holdoff_s, 0.25)  # Filter-Ringing-Nachklingzeit
@@ -1103,6 +1110,20 @@ class BeatDetector:
         """
         now = time.time()
 
+        # Absolute Lautstärke-Untergrenze (Runde 9, 2026-10-13, Nutzer-
+        # Feedback: Rap-Vocals/leise Sprech-Passagen ohne Beat triggern den
+        # Kick, obwohl "das sind keine lauten Geräusche"). Die bisherigen
+        # Gates unten sind alle RELATIV (wieviel Standardabweichungen über
+        # dem eigenen, kurzen Hintergrund, wieviel schärfer als vor ~35ms) -
+        # bei insgesamt leiser Musik/Sprache kann ein kleiner absoluter
+        # Ausschlag trotzdem relativ "auffällig" wirken. Gleiche dBFS-Formel
+        # wie capture.LevelMeter, auf dem vollen (ungefilterten) Mono-Block,
+        # damit der konfigurierte Wert direkt mit dem dBFS-Pegel aus Monitor/
+        # live_monitor.log vergleichbar ist - echte Club-Auswertung zeigte
+        # 85-86% der (fälschlich akzeptierten) Kicks bei <-25dBFS.
+        block_rms = float(np.sqrt(np.mean(mono.astype(np.float64) ** 2)))
+        block_level_dbfs = 20.0 * np.log10(block_rms) if block_rms >= 1e-9 else -100.0
+
         filtered, self._kalman_kick_zi = sosfilt(self._kalman_kick_sos, mono, zi=self._kalman_kick_zi)
         envelope = float(np.sqrt(np.mean(filtered.astype(np.float64) ** 2)))
 
@@ -1204,7 +1225,9 @@ class BeatDetector:
         # Reihenfolge wie die eigentliche Entscheidung unten, damit beide
         # nie auseinanderlaufen können.
         reason = None
-        if len(buf) < 4 or envelope <= self._kalman_kick_noise_floor:
+        if block_level_dbfs < self._kalman_kick_min_level_dbfs:
+            reason = "level_too_quiet"
+        elif len(buf) < 4 or envelope <= self._kalman_kick_noise_floor:
             reason = "threshold_not_reached"
         elif not above_baseline:
             reason = "insufficient_rise"
@@ -1234,6 +1257,7 @@ class BeatDetector:
         if self._debug_triggers:
             self._kick_debug = {
                 "envelope": envelope, "threshold": threshold if threshold != float("inf") else None,
+                "level_dbfs": block_level_dbfs, "min_level_dbfs": self._kalman_kick_min_level_dbfs,
                 "baseline_mean": baseline_mean, "baseline_std": baseline_std,
                 "is_sharp": is_sharp, "sharpness_ratio": sharpness_ratio,
                 "hpss_energy": self._hpss_kick_energy, "hpss_confirms": hpss_confirms,
@@ -1708,6 +1732,7 @@ def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None, soundlight_c
     kalman_kick_cutoff_hz: float  = bpm_cfg.get("kalman_kick_cutoff_hz", 130.0)
     kalman_kick_std_factor: float = bpm_cfg.get("kalman_kick_std_factor", 2.5)
     kalman_kick_sharpness_ratio: float = bpm_cfg.get("kalman_kick_sharpness_ratio", 4.0)
+    kalman_kick_min_level_dbfs: float = bpm_cfg.get("kalman_kick_min_level_dbfs", -100.0)
     kalman_kick_holdoff_s: float  = bpm_cfg.get("kalman_kick_holdoff_s", 0.2)
     kalman_kick_hpss_std_factor: float = bpm_cfg.get("kalman_kick_hpss_std_factor", 1.0)
     kalman_q_time: float          = bpm_cfg.get("kalman_q_time", 0.0004)
@@ -1864,6 +1889,7 @@ def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None, soundlight_c
         kalman_kick_cutoff_hz=kalman_kick_cutoff_hz,
         kalman_kick_std_factor=kalman_kick_std_factor,
         kalman_kick_sharpness_ratio=kalman_kick_sharpness_ratio,
+        kalman_kick_min_level_dbfs=kalman_kick_min_level_dbfs,
         kalman_kick_holdoff_s=kalman_kick_holdoff_s,
         kalman_kick_hpss_std_factor=kalman_kick_hpss_std_factor,
         kalman_q_time=kalman_q_time,

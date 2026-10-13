@@ -203,6 +203,18 @@ bpm:
   # Baseline-Fenster (kalman_env_win, aktuell nur im Code fest verdrahtet,
   # siehe beat_detector.py) als möglicher zweiter Faktor.
   kalman_kick_sharpness_ratio: 1.8
+  # Absolute Lautstärke-Untergrenze (dBFS) für einen Kick-Kandidaten,
+  # unabhängig von allen relativen Schwellen oben (siehe kalman_kick_std_
+  # factor/sharpness_ratio - beide schauen nur "auffällig ggü. dem eigenen,
+  # kurzen Hintergrund", nicht "insgesamt laut genug für einen echten Club-
+  # Kick"). Neu, 2026-10-13 (Rap-Song-Test, Nutzer-Feedback: "da wird
+  # gelabert... das sind keine lauten Geräusche, aber da gibt es dann halt
+  # schon Trigger"). live_monitor.log/csv ausgewertet: 85-86% der
+  # fälschlich akzeptierten Kicks fielen auf Momente mit level_dbfs unter
+  # -25 - also knapp darunter angesetzt, damit echte, clubmäßig laute Kicks
+  # sicher durchkommen. Default im Code (-100.0) lässt praktisch alles durch
+  # (altes Verhalten) - nur hier in der echten Club-Config scharf gestellt.
+  kalman_kick_min_level_dbfs: -25.0
   # Mindestabstand zwischen zwei rohen Impulsen (Sekunden)
   kalman_kick_holdoff_s: 0.2
   # HPSS-Bestätigungs-Gate: ein Impuls muss zusätzlich perkussiv (statt
