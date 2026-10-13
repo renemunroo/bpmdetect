@@ -327,6 +327,27 @@ link:
   # Koppelt mit der Hysterese der Beat-Detection — verhindert Jitter.
   tempo_hysteresis: 0.5
 
+  # Bugfix 2026-10-13: set_tempo (oben) korrigiert nur die TAKTRATE, nie die
+  # BEAT-PHASE selbst - kleine Resttempo-Ungenauigkeiten sammelten sich
+  # dadurch unkorrigiert zu hörbarem/sichtbarem Phasenversatz auf ("BPM
+  # Flash" auf den Kugeln lief mit der Zeit auseinander, fing sich dann
+  # kurz wieder - das war vermutlich der Nutzer selbst beim manuellen
+  # TAP, nicht automatische Korrektur). Jetzt: periodische, sanfte
+  # Phasenkorrektur über requestBeatAtTime() (Ableton Links eigene,
+  # empfohlene Methode für laufende Korrekturen, kein harter Sprung).
+  # Nur relevant, wenn mode=output (siehe unten) - im input-Modus schreibt
+  # bpmdetect ohnehin nichts an Link zurück.
+  #
+  # Totzone in Bruchteilen EINES Beats (0.05 = 5%, bei 120BPM ~25ms) -
+  # darunter wird NICHT korrigiert, sonst würde normales Mess-Rauschen der
+  # Audio-Phasenerkennung eine ständige, sichtbare Mini-Korrektur auslösen.
+  phase_correction_deadband: 0.05
+
+  # Mindestabstand zwischen zwei Phasenkorrekturen (Millisekunden) - gibt
+  # Link Zeit, die letzte Korrektur wirklich zu übernehmen, bevor die
+  # nächste gesendet wird.
+  phase_correction_interval_ms: 1000
+
   # Wie oft bridge.js (Node) den Link-State pusht (Millisekunden) - bestimmt
   # die Zeitgenauigkeit von beat_kick (siehe beat_grid unten). Vorher fest
   # 100ms, jetzt konfigurierbar. Der Scheduler feuert nur auf einen neuen

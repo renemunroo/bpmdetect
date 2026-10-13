@@ -67,19 +67,26 @@ let _quantum = INIT_QUANTUM;
 
 function getTempo()        { return link.getTempo(); }
 function setTempo(bpm)     { link.setTempo(bpm); }
-function getPhase()        { return link.getPhase(_quantum) / _quantum; } // → 0..1
+function getPhase()        { return link.getPhase(_quantum) / _quantum; } // → 0..1, über das volle Quantum (Takt)
+// Phase über GENAU EINEN Beat (quantum=1), unabhängig vom konfigurierten
+// Quantum oben - Python vergleicht das mit der aus dem Audio erkannten
+// Beat-Phase (ebenfalls pro einzelnem Beat, siehe beat_detector.py
+// beat_phase), für die Phasenkorrektur (request_beat unten) muss das
+// dieselbe Domäne sein, nicht die Quantum/Takt-Phase.
+function getBeatPhase()    { return link.getPhase(1); } // → 0..1, pro Beat (quantum=1 braucht keine Division)
 function getBeat()         { return link.getBeat(); }
 function getPeers()        { return link.getNumPeers(); }
 function getQuantum()      { return _quantum; }
 
 function snapshot() {
   return {
-    type:    'state',
-    tempo:   getTempo(),
-    phase:   getPhase(),
-    beat:    getBeat(),
-    peers:   getPeers(),
-    quantum: getQuantum(),
+    type:      'state',
+    tempo:     getTempo(),
+    phase:     getPhase(),
+    beatPhase: getBeatPhase(),
+    beat:      getBeat(),
+    peers:     getPeers(),
+    quantum:   getQuantum(),
   };
 }
 
@@ -109,6 +116,35 @@ rl.on('line', (raw) => {
     case 'set_quantum': {
       const q = parseFloat(cmd.quantum);
       if (q > 0) _quantum = q;
+      break;
+    }
+    // Bugfix 2026-10-13 ("BPM Flash" auf Kugeln lief auseinander, fing sich
+    // dann wieder): set_tempo allein korrigiert nur die TAKTRATE, nie die
+    // BEAT-PHASE selbst - Links eigener Beat-Zähler lief seitdem rein
+    // rechnerisch weiter, jede noch so kleine Resttempo-Ungenauigkeit (unter
+    // der Tempo-Hysterese, siehe set_tempo oben) sammelte sich unkorrigiert
+    // zu echtem Phasenversatz auf. requestBeatAtTime() ist die von Ableton
+    // selbst empfohlene SANFTE Korrektur (im Gegensatz zu forceBeatAtTime,
+    // das für harte, einmalige Sprünge gedacht ist und bei echten externen
+    // Link-Teilnehmern hörbar/sichtbar rucken würde) - Python
+    // (link_bridge.py update()) sendet das periodisch, gedämpft über eine
+    // Totzone + Mindestabstand, mit dem Ziel-Beat aus dem bereits
+    // berechneten phase_offset.
+    //
+    // `time` muss in derselben Zeit-Domäne wie Links interner Takt sein,
+    // die @ktamas77/abletonlink aber nicht direkt exponiert (nur die
+    // Beat<->Zeit-Umrechnung über getTimeForBeat). getTimeForBeat(aktueller
+    // Beat, quantum) liefert praktisch "jetzt" in dieser Domäne - der
+    // winzige Zeitversatz zwischen den beiden synchronen Aufrufen
+    // (Mikrosekunden) ist angesichts der Totzone (Bruchteile eines Beats)
+    // vernachlässigbar.
+    case 'request_beat': {
+      const beat = parseFloat(cmd.beat);
+      const quantum = parseFloat(cmd.quantum);
+      if (Number.isFinite(beat) && quantum > 0) {
+        const now = link.getTimeForBeat(getBeat(), quantum);
+        link.requestBeatAtTime(beat, now, quantum);
+      }
       break;
     }
     case 'get_state':

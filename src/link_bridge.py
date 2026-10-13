@@ -51,6 +51,38 @@ def _find_node() -> Optional[str]:
     return None
 
 
+def _phase_correction_target(
+    offset: float,
+    deadband: float,
+    now: float,
+    last_correction_t: float,
+    correction_interval: float,
+    current_beat: float,
+) -> Optional[float]:
+    """Reine Entscheidungslogik für die Beat-Phasenkorrektur (Bugfix
+    2026-10-13, siehe LinkBridge.update()) - bewusst als eigenständige
+    Funktion statt Methode, damit sie ohne echten Subprocess/echte Link-
+    Session testbar ist (gleiches Prinzip wie clampTempo in aura-lc's
+    src/linkSync.js).
+
+    `offset` ist Link-Beat-Phase minus erkannte Audio-Phase (auf
+    [-0.5, 0.5] normiert, siehe Aufrufer). Gibt den Ziel-Beat zurück, auf
+    den request_beat gesetzt werden soll, oder None, wenn (noch) nicht
+    korrigiert werden soll:
+    - innerhalb der Totzone (`abs(offset) <= deadband`) - normales
+      Mess-Rauschen der Audio-Phasenerkennung soll keine ständige
+      sichtbare Mini-Korrektur auslösen.
+    - seit der letzten Korrektur ist noch nicht genug Zeit vergangen
+      (`correction_interval`) - gibt Link Zeit, die letzte Korrektur
+      tatsächlich zu übernehmen, bevor die nächste gesendet wird.
+    """
+    if abs(offset) <= deadband:
+        return None
+    if (now - last_correction_t) < correction_interval:
+        return None
+    return current_beat - offset
+
+
 class LinkBridge:
     """
     Verwaltet den Node.js-Link-Subprocess und exponiert den Link-State.
@@ -65,6 +97,8 @@ class LinkBridge:
         update_interval_ms: float = 200.0,
         tempo_hysteresis: float = 0.5,
         push_interval_ms: float = 25.0,
+        phase_correction_deadband: float = 0.05,
+        phase_correction_interval_ms: float = 1000.0,
     ) -> None:
         self._quantum = quantum
         self._update_interval = update_interval_ms / 1000.0
@@ -74,10 +108,24 @@ class LinkBridge:
         # beat_kick-Zeitgenauigkeit, siehe beat_scheduler.py. Wird beim
         # Subprocess-Start als CLI-Arg an bridge.js übergeben.
         self._push_interval_ms = push_interval_ms
+        # Bugfix 2026-10-13 (Beat-Phase lief auseinander, set_tempo allein
+        # korrigiert nur die Taktrate, nie die Phase selbst - siehe
+        # request_beat-Kommentar in bridge.js): Totzone in Bruchteilen EINES
+        # Beats (0.05 = 5% eines Beats, z.B. bei 120BPM ~25ms) - darunter
+        # wird NICHT korrigiert, sonst würde jede normale Mess-Unschärfe der
+        # Audio-Phasenerkennung eine ständige, sichtbare Mini-Korrektur
+        # auslösen. Mindestabstand zwischen zwei Korrekturen (Default 1s) -
+        # verhindert, dass eine Korrektur noch nicht "angekommen" ist (Link
+        # braucht einen Moment, bis andere Peers/der eigene State sie
+        # übernommen haben), bevor schon die nächste gesendet wird.
+        self._phase_correction_deadband = phase_correction_deadband
+        self._phase_correction_interval = phase_correction_interval_ms / 1000.0
+        self._last_phase_correction_t: float = 0.0
 
         self._lock = threading.Lock()
         self._session_tempo: float = 0.0
-        self._link_phase: float = 0.0       # 0..1, aus Link-Timeline
+        self._link_phase: float = 0.0       # 0..1, über das volle Quantum (Takt) - nur fürs Logging/GUI
+        self._link_beat_phase: float = 0.0  # 0..1, über GENAU EINEN Beat - für den Phasenvergleich/-korrektur
         self._link_beat: float = 0.0
         self._peers: int = 0
         self._exported_bpm: float = 0.0
@@ -177,14 +225,45 @@ class LinkBridge:
                 self._exported_bpm = detected_bpm
                 self._last_export_t = now
 
-        # Phase-Offset: Differenz Link-Phase (0..1) zu detektierter Phase (0..1),
-        # auf [-0.5, 0.5] normiert (negativ = Link hinkt nach)
+        # Phase-Offset: Differenz Link-BEAT-Phase (0..1, EIN Beat - siehe
+        # _link_beat_phase, bridge.js getBeatPhase()) zu detektierter Phase
+        # (0..1, ebenfalls pro Beat, siehe beat_detector.py beat_phase) -
+        # auf [-0.5, 0.5] normiert (negativ = Link hinkt nach). Bugfix
+        # 2026-10-13: vorher gegen `_link_phase` (Quantum-/Takt-Phase,
+        # Standard quantum=4) verglichen - eine andere Domäne als die
+        # Pro-Beat-Phase aus der Audio-Erkennung, der errechnete Offset war
+        # dadurch bis zu `quantum`-fach falsch (hier allerdings folgenlos,
+        # weil er bis jetzt nie für eine echte Korrektur genutzt wurde,
+        # siehe unten).
         if detected_phase >= 0:
             with self._lock:
-                raw = self._link_phase - detected_phase
+                raw = self._link_beat_phase - detected_phase
             offset = (raw + 0.5) % 1.0 - 0.5
             with self._lock:
                 self._phase_offset = offset
+                last_correction_t = self._last_phase_correction_t
+                current_beat = self._link_beat
+
+            # Bugfix 2026-10-13 ("BPM Flash" lief auseinander, fing sich
+            # dann wieder - siehe request_beat-Kommentar in bridge.js):
+            # set_tempo oben korrigiert nur die Taktrate, nie die Phase -
+            # das hier ist die eigentliche Phasenkorrektur, sanft (request,
+            # nicht force) und gedämpft (Totzone + Mindestabstand), damit
+            # normales Mess-Rauschen der Audio-Phasenerkennung nicht in
+            # einer ständigen sichtbaren Mini-Korrektur endet.
+            target_beat = _phase_correction_target(
+                offset,
+                self._phase_correction_deadband,
+                now,
+                last_correction_t,
+                self._phase_correction_interval,
+                current_beat,
+            )
+            if target_beat is not None:
+                self._send({"type": "request_beat", "beat": round(target_beat, 4), "quantum": 1})
+                with self._lock:
+                    self._last_phase_correction_t = now
+                _warn(f"phase_correction: offset={offset:+.3f} beat -> Ziel-Beat {target_beat:.3f}")
 
     # ── Properties ───────────────────────────────────────────────────────────
 
@@ -217,9 +296,17 @@ class LinkBridge:
 
     @property
     def link_phase(self) -> float:
-        """Link-Phase 0..1."""
+        """Link-Phase 0..1, über das volle Quantum (Takt)."""
         with self._lock:
             return self._link_phase
+
+    @property
+    def link_beat_phase(self) -> float:
+        """Link-Phase 0..1, über GENAU EINEN Beat - dieselbe Domäne wie
+        beat_detector.py's beat_phase, für die Phasenkorrektur (siehe
+        update())."""
+        with self._lock:
+            return self._link_beat_phase
 
     @property
     def link_beat(self) -> float:
@@ -277,6 +364,12 @@ class LinkBridge:
                     with self._lock:
                         self._session_tempo = float(msg.get("tempo", 0))
                         self._link_phase    = float(msg.get("phase", 0))
+                        # Fällt auf die Quantum-Phase zurück, falls eine
+                        # ältere bridge.js (ohne beatPhase-Feld) läuft -
+                        # dann bleibt die Phasenkorrektur oben einfach
+                        # inaktiv (Totzone/Vergleich wird dadurch nur
+                        # ungenauer, nie falsch-positiv aktiv), kein Absturz.
+                        self._link_beat_phase = float(msg.get("beatPhase", self._link_phase))
                         self._link_beat     = float(msg.get("beat",  0))
                         self._peers         = int(msg.get("peers",   0))
             except (json.JSONDecodeError, ValueError):

@@ -109,6 +109,12 @@ link:
   # Koppelt mit der Hysterese der Beat-Detection — verhindert Jitter.
   tempo_hysteresis: 0.5
 
+  # Bugfix 2026-10-13: Beat-PHASEN-Korrektur (zusätzlich zur Tempo-Korrektur
+  # oben) - siehe club.yaml für die ausführliche Begründung. Nur relevant,
+  # wenn mode=output.
+  phase_correction_deadband: 0.05
+  phase_correction_interval_ms: 1000
+
 soundlight:
   # Sound-to-Light aktivieren: schickt Kick/Snare/Hihat-Energie per HTTP an
   # Grand Vision (dessen Effekt-Engine kann sie z.B. für sound_pulse /

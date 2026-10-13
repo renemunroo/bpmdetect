@@ -1760,15 +1760,22 @@ def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None, soundlight_c
         upd_interval_ms   = link_cfg.get("update_interval_ms", 200.0)
         link_hysteresis   = link_cfg.get("tempo_hysteresis", 0.5)
         push_interval_ms  = link_cfg.get("push_interval_ms", 25.0)
+        # Bugfix 2026-10-13 (Beat-Phase driftete, set_tempo korrigiert nur
+        # die Taktrate) - siehe link_bridge.py update()/_phase_correction_target().
+        phase_deadband    = link_cfg.get("phase_correction_deadband", 0.05)
+        phase_interval_ms = link_cfg.get("phase_correction_interval_ms", 1000.0)
         link_bridge = LinkBridge(
             quantum=quantum,
             update_interval_ms=upd_interval_ms,
             tempo_hysteresis=link_hysteresis,
             push_interval_ms=push_interval_ms,
+            phase_correction_deadband=phase_deadband,
+            phase_correction_interval_ms=phase_interval_ms,
         )
         if link_bridge.start():
             print(f"Link         : aktiv  mode={link_mode}  quantum={quantum}  "
-                  f"push={push_interval_ms:.0f}ms  update={upd_interval_ms:.0f} ms  hysterese={link_hysteresis} BPM")
+                  f"push={push_interval_ms:.0f}ms  update={upd_interval_ms:.0f} ms  hysterese={link_hysteresis} BPM  "
+                  f"phasenkorrektur: Totzone={phase_deadband:.2f} Beat, min. Abstand={phase_interval_ms:.0f}ms")
         else:
             print("[link] Nicht verfügbar — fahre ohne Link fort.")
             link_bridge = None
