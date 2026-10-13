@@ -301,6 +301,23 @@ class LiveMonitor:
             parts.append(f"CLAP  conf={cd.get('confidence', 0.0):.2f}")
         self._log_file.write("  ".join(parts) + "\n")
 
+        # Runde 8 (2026-10-13, Nutzer-Feedback "Snare ist unruhiger als
+        # Kick"): volle Snare-/Clap-Diagnose (body_ratio/snap_ratio/score,
+        # bereits von _update_snare_trigger()/_update_clap_trigger() in
+        # trigger_debug() befüllt, siehe beat_detector.py) als eigene
+        # JSON-Zeile - analog zu GATE_DIAG beim Kick (siehe _loop() unten).
+        # Die kompakte "SNARE conf=..."-Zeile oben reicht nicht, um zu
+        # unterscheiden, ob ein Trigger an einer stark ausgeprägten
+        # Koinzidenz lag oder nur knapp über der "schwachen" 35%-Schwelle
+        # (trigger_snare_allow_weak_body) - rein additiv, ändert nichts an
+        # der bestehenden Zeile/CSV-Spaltenzahl.
+        if evt["snare"]:
+            sd_ = (evt["trigger_debug"] or {}).get("snare", {})
+            self._log_file.write(f"{ts}  SNARE_DIAG  {json.dumps(sd_, default=str)}\n")
+        if evt["clap"]:
+            cd = (evt["trigger_debug"] or {}).get("clap", {})
+            self._log_file.write(f"{ts}  CLAP_DIAG  {json.dumps(cd, default=str)}\n")
+
         if not self._csv_writer:
             return
         det = self._detector
