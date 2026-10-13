@@ -1282,6 +1282,7 @@ class BeatDetector:
             self._kick_gate_pending.append({
                 "candidate_t": now,
                 "envelope": envelope,
+                "level_dbfs": block_level_dbfs,
                 "sharpness_ratio": sharpness_ratio,
                 "is_sharp": is_sharp,
                 "hpss_energy_at_candidate": self._hpss_kick_energy,
