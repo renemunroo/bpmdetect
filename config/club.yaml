@@ -442,7 +442,21 @@ live_monitor:
   log_path: "logs/live_monitor.log"
   # Optional: zusätzlich jede Kick-/Snare-/Clap-Zeile strukturiert in eine
   # CSV schreiben (für spätere Auswertung/Tabellen). null = aus.
-  csv_path: null
+  #
+  # Aktiviert (2026-10-13, Rap-Song-Test): Nutzer berichtete Fehltrigger auf
+  # Rap-Vocals/Bass ("spricht dann auch der Rap an") und auf leise
+  # Sprech-/Intro-Passagen ohne Beat. Ausgewertet (live_monitor.log): 86%
+  # der akzeptierten Kicks in diesem Test fielen auf vergleichsweise leise
+  # Momente (<-25dBFS) - für echte Bassdrum-Treffer untypisch, passt aber
+  # zur Beschreibung. Die relevanten Rohmesswerte für die bereits im Code
+  # vorhandene, aber noch deaktivierte Bassline-Unterdrückung (duration_
+  # above_threshold_s/decay_ratio/centroid_drift_hz, siehe kick_bassline_
+  # suppression_enabled weiter oben) werden schon berechnet, landen aber nur
+  # in der CSV (_CSV_COLUMNS in live_monitor.py), nicht im Text-Log - csv_
+  # path war der fehlende Schalter, um sie für die Kalibrierung (siehe
+  # Kommentar bei kick_bassline_suppression_enabled: "erst mit echten
+  # House-/Rap-808-/Latino-Aufnahmen kalibrieren") sichtbar zu machen.
+  csv_path: "logs/live_monitor.csv"
   # 'm' + Enter im Terminal speichert einen Marker (letzte history_s
   # Sekunden als JSON) - funktioniert nur bei interaktivem Terminal
   # (sys.stdin.isatty()), sonst automatisch aus. `kill -USR1 <pid>`
