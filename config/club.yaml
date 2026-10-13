@@ -100,7 +100,23 @@ bpm:
   # Höher = weniger empfindlich/weniger Fehltrigger.
   trigger_snare_std_factor: 1.5
   # Mindestabstand zwischen zwei Triggern desselben Bands (Sekunden)
-  trigger_snare_holdoff_s: 0.15
+  #
+  # Auf 0.4 angehoben (2026-10-13, Nutzer-Feedback "Snare ist unruhig/
+  # feuert extrem oft"): echtes Log ausgewertet (372 Snare-Events über
+  # ~110s) - Median-Abstand zwischen zwei Triggern lag bei nur 0.186s,
+  # also knapp über dem alten 0.15s-Cooldown. Die Treffer verteilten sich
+  # außerdem GLEICHMÄSSIG über den ganzen Beat-Zyklus (Phasen-Histogramm
+  # über 8 Achtel-Positionen: 32-70 Treffer pro Bin, keine Konzentration
+  # auf bestimmte Taktpositionen wie bei einem echten Backbeat-Muster zu
+  # erwarten wäre) - der Cooldown war also der limitierende Faktor, nicht
+  # der Musikinhalt: der Trigger feuert praktisch, sobald er darf, nicht
+  # nur bei echten, musikalisch platzierten Treffern. Simulation gegen das
+  # echte Log: 0.3s hätte die Rate nur auf 62% gesenkt (noch zu dicht),
+  # 0.4s auf 50% - 0.4s lässt bei den schnellsten erlaubten Tempi (180 BPM,
+  # bpm_max) immer noch bis zu 2 Treffer pro Beat zu, ist für normale/
+  # langsamere Clubtempi klar spürbar ruhiger. Erster, datengestützter
+  # Versuch - noch nicht im Club validiert.
+  trigger_snare_holdoff_s: 0.4
   # Wie eng Body- und Snap-Treffer zeitlich beieinander liegen müssen, um
   # als eine gemeinsame Snare zu zählen (Sekunden)
   trigger_snare_coincidence_s: 0.06
