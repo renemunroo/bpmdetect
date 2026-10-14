@@ -346,6 +346,43 @@ class KickTriggerTests(unittest.TestCase):
             ):
                 self.assertIn(key, dbg)
 
+    def test_kalman_flywheel_deinitializes_after_silence_timeout(self) -> None:
+        """Bugfix 2026-10-14 (Live-Club-Test, Nutzer-Report "läuft keine
+        Musik und Kick triggert trotzdem"): _kalman_advance() ("Schwungrad
+        durch Pausen/Drops") feuerte früher unbegrenzt auf dem zuletzt
+        gelockten Tempo weiter, auch ohne jeden neuen Kandidaten - z.B.
+        nach Songende. Muss sich nach kalman_kick_silence_timeout_s ohne
+        jeden neuen Kandidaten deinitialisieren statt weiterzuspielen."""
+        det = make_kick_detector(kalman_kick_silence_timeout_s=0.2)
+        clock = FakeClock()
+        with patch.object(bd.time, "time", new=clock):
+            # Bootstrap: zwei echte Treffer im Abstand von ~0.46s (innerhalb
+            # bpm_min=70/bpm_max=180, Default) lassen den Tracker einrasten -
+            # derselbe 40-Block-Silence-Abstand wie in
+            # test_weak_kick_not_suppressed_by_stuck_baseline oben, dort
+            # bereits als ausreichend für eine erneute Akzeptanz bestätigt.
+            for _ in range(30):
+                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
+                clock.advance(det._hop)
+            burst = tone_blocks(det, 60.0, 0.8, 1)[0]
+            det._update_kalman_kick(burst)
+            self.assertIsNone(det.kick_debug["reject_reason"])
+            for _ in range(40):
+                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
+                clock.advance(det._hop)
+            det._update_kalman_kick(burst)
+            self.assertIsNone(det.kick_debug["reject_reason"])
+            self.assertTrue(det._kalman_initialized, "nach zwei echten Treffern im Tempo-Bereich sollte der Tracker eingerastet sein")
+
+            # Deutlich länger als der (für den Test verkürzte) Timeout
+            # Stille, ohne jeden weiteren Kandidaten.
+            for _ in range(60):
+                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
+                clock.advance(det._hop)
+
+            self.assertFalse(det._kalman_initialized, "nach > silence_timeout ohne jeden Kandidaten muss sich der Tracker deinitialisieren")
+            self.assertFalse(det.kick_trigger, "darf nach der Stille nicht mehr auf dem alten Tempo weiterfeuern")
+
 
 class KickHpssKernelTests(unittest.TestCase):
     """Runde 2, Phase 2 - der optionale, kick-eigene HPSS-Kernel."""

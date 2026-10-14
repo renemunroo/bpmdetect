@@ -175,6 +175,24 @@ class BeatDetector:
         # bei _update_kalman_kick für die Begründung.
         kalman_kick_min_level_dbfs: float = -100.0,
         kalman_kick_holdoff_s: float = 0.2,
+        # 2026-10-14 (Live-Club-Test, Nutzer-Report "läuft keine Musik und
+        # Kick triggert trotzdem"): _kalman_advance() (reine Vorhersage,
+        # "Schwungrad durch Pausen/Drops") hatte KEINE Obergrenze, wie lange
+        # es ohne einen einzigen neuen echten Kandidaten weiterfeuern darf -
+        # einmal eingerastet (_kalman_initialized=True, schon nach dem
+        # zweiten echten Treffer), lief die Vorhersage buchstäblich für
+        # immer auf dem zuletzt gelockten Tempo weiter, auch nach dem Ende
+        # des Songs/in Stille. Diese Obergrenze (Sekunden seit dem letzten
+        # Kandidaten, der die Level-/Sharpness-/HPSS-/Holdoff-Gates
+        # passiert hat - unabhängig davon, ob der Kalman-Filter ihn später
+        # als Ausreißer verworfen hat, siehe _kalman_on_impulse) setzt
+        # _kalman_initialized zurück, sobald sie überschritten ist -
+        # danach bootstrapped der Tracker beim nächsten echten Doppel-
+        # Treffer neu, exakt wie beim allerersten Start. Default 4.0s (~6-8
+        # Beats im üblichen Clubtempo) lässt kurze Drops/Breaks im Song
+        # weiterhin unbeeinflusst durchlaufen, beendet aber zuverlässig das
+        # Nachfeuern zwischen zwei Songs oder bei Gesprächspausen.
+        kalman_kick_silence_timeout_s: float = 4.0,
         kalman_kick_hpss_std_factor: float = 1.0,  # Bestätigungs-Gate: wie streng die HPSS-Perkussions-Prüfung ist (höher = strenger, mehr echte Kicks können durchfallen)
         kalman_q_time: float = 0.0004,     # Prozessrauschen: Zeit/Phase (s²) pro Beat
         kalman_q_period: float = 0.00002,  # Prozessrauschen: Tempo/Periode (s²) pro Beat
@@ -386,6 +404,7 @@ class BeatDetector:
         self._kalman_kick_noise_floor = 1e-5
         self._kalman_kick_min_level_dbfs = kalman_kick_min_level_dbfs
         self._kalman_kick_holdoff_s = kalman_kick_holdoff_s
+        self._kalman_kick_silence_timeout_s = kalman_kick_silence_timeout_s
         self._kalman_kick_hpss_std_factor = kalman_kick_hpss_std_factor
         self._kalman_kick_freeze_s = max(kalman_kick_holdoff_s, 0.25)  # Filter-Ringing-Nachklingzeit
         self._kalman_kick_last_impulse_t = 0.0
@@ -1426,8 +1445,18 @@ class BeatDetector:
     def _kalman_advance(self, now: float) -> bool:
         """Reine Prädiktion, solange keine Messung ansteht - "Schwungrad"
         durch Pausen/Drops. Feuert auf dem vorhergesagten Zeitplan, nicht
-        auf der Rohmessung - das eigentliche "vorausschauende Blitzen"."""
+        auf der Rohmessung - das eigentliche "vorausschauende Blitzen".
+
+        Bugfix (siehe Konstruktor-Kommentar bei kalman_kick_silence_
+        timeout_s): das Schwungrad lief früher unbegrenzt weiter, auch
+        ohne jeden neuen echten Kandidaten - z.B. nach Songende. Jetzt:
+        zu lange ohne neuen Kandidaten (_kalman_kick_last_impulse_t) ->
+        deinitialisieren statt weiter vorherzusagen; der nächste echte
+        Doppel-Treffer bootstrapped den Tracker dann neu."""
         if not self._kalman_initialized:
+            return False
+        if (now - self._kalman_kick_last_impulse_t) > self._kalman_kick_silence_timeout_s:
+            self._kalman_initialized = False
             return False
         fired = False
         while now >= self._kalman_flash_t:
@@ -1735,6 +1764,7 @@ def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None, soundlight_c
     kalman_kick_sharpness_ratio: float = bpm_cfg.get("kalman_kick_sharpness_ratio", 4.0)
     kalman_kick_min_level_dbfs: float = bpm_cfg.get("kalman_kick_min_level_dbfs", -100.0)
     kalman_kick_holdoff_s: float  = bpm_cfg.get("kalman_kick_holdoff_s", 0.2)
+    kalman_kick_silence_timeout_s: float = bpm_cfg.get("kalman_kick_silence_timeout_s", 4.0)
     kalman_kick_hpss_std_factor: float = bpm_cfg.get("kalman_kick_hpss_std_factor", 1.0)
     kalman_q_time: float          = bpm_cfg.get("kalman_q_time", 0.0004)
     kalman_q_period: float        = bpm_cfg.get("kalman_q_period", 0.00002)
@@ -1892,6 +1922,7 @@ def run_bpm(cfg: dict, monitor: dict, bpm_cfg: dict, link_cfg=None, soundlight_c
         kalman_kick_sharpness_ratio=kalman_kick_sharpness_ratio,
         kalman_kick_min_level_dbfs=kalman_kick_min_level_dbfs,
         kalman_kick_holdoff_s=kalman_kick_holdoff_s,
+        kalman_kick_silence_timeout_s=kalman_kick_silence_timeout_s,
         kalman_kick_hpss_std_factor=kalman_kick_hpss_std_factor,
         kalman_q_time=kalman_q_time,
         kalman_q_period=kalman_q_period,

@@ -233,6 +233,18 @@ bpm:
   kalman_kick_min_level_dbfs: -25.0
   # Mindestabstand zwischen zwei rohen Impulsen (Sekunden)
   kalman_kick_holdoff_s: 0.2
+  # Wie viele Sekunden das Kalman-Schwungrad (_kalman_advance, reine
+  # Vorhersage, "feuert auf dem vorhergesagten Zeitplan") ohne JEDEN neuen
+  # Kandidaten weiterlaufen darf, bevor es sich deinitialisiert. Neu,
+  # 2026-10-14 (Live-Test, Nutzer-Report "läuft keine Musik und Kick
+  # triggert trotzdem"): vorher gab es gar keine Obergrenze - einmal
+  # gelockt, feuerte die Vorhersage buchstäblich für immer auf dem zuletzt
+  # bekannten Tempo weiter, auch nach Songende/in Stille (die Level-/
+  # Sharpness-Gates verhindern zwar neue AKZEPTIERTE Kandidaten in Stille,
+  # aber _kalman_advance() selbst prüfte das nie, rein "Schwungrad"-Logik).
+  # 4.0s lässt kurze Drops/Breaks IM Song unverändert durchlaufen, beendet
+  # aber zuverlässig das Nachfeuern zwischen zwei Songs/bei Gesprächspausen.
+  kalman_kick_silence_timeout_s: 4.0
   # HPSS-Bestätigungs-Gate: ein Impuls muss zusätzlich perkussiv (statt
   # harmonisch/Bassline-artig) aussehen, um akzeptiert zu werden - höher =
   # strenger (weniger Fehltrigger von tiefen Bassnoten/anderer tieffrequenter
