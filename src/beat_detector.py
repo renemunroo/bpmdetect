@@ -1116,14 +1116,22 @@ class BeatDetector:
            einen rohen "Impuls"-Zeitstempel liefert - genau wie vorher,
            bloß viel schneller.
 
-        2. Back-End (Zustandsschätzung): der rohe Impuls speist NUR eine
+        2. Back-End (Zustandsschätzung): der rohe Impuls speist eine
            Korrektur in ein Kalman-Filter mit State [nächster Beat-
            Zeitpunkt, Periode] - das Filter läuft dazwischen frei weiter
            (Prädiktion), auch durch Pausen/Drops hindurch ("Schwungrad").
-           Der eigentliche Trigger feuert auf dieser VORHERGESAGTEN,
-           geglätteten Taktung (_kalman_flash_t), nicht auf dem rohen
-           Impuls direkt - das ist der Kern von "vorausschauendem Blitzen"
-           statt "Blitzen bei jedem Treffer". Die Kalman-Verstärkung ist
+           Ursprünglich feuerte der eigentliche Trigger auf dieser
+           VORHERGESAGTEN, geglätteten Taktung (_kalman_flash_t) statt auf
+           dem rohen Impuls direkt ("vorausschauendes Blitzen" statt
+           "Blitzen bei jedem Treffer") - geändert 2026-10-14 (Live-Club-
+           Test, klare Nutzer-Anforderung "einen Trigger auf jede Kick"):
+           die Vorhersage kann auf eine falsche Periode einrasten und
+           blitzt dann stabil, aber hörbar nicht im Takt - schlimmer als
+           ein gelegentlicher Dropout. `kick_trigger` feuert jetzt direkt
+           auf `is_impulse`, exakt wie snare_trigger/clap_trigger (siehe
+           Zuweisung am Ende dieser Methode). Das Kalman-Schwungrad läuft
+           weiterhin im Hintergrund (Diagnose/kalman_state), bestimmt aber
+           nicht mehr, wann getriggert wird. Die Kalman-Verstärkung bleibt
            unsicherheits-adaptiv (klein wenn das Filter schon sicher ist,
            groß direkt nach einer längeren Pause) statt fest verdrahtet.
         """
@@ -1326,10 +1334,29 @@ class BeatDetector:
         if not is_impulse and (now - self._kalman_kick_last_impulse_t) >= self._kalman_kick_freeze_s:
             buf.append(envelope)
 
+        # 2026-10-14 (Live-Club-Test, klare Nutzer-Anforderung: "einen
+        # Trigger auf jede Kick und einen Trigger auf jede Snare. Punkt."):
+        # das ursprüngliche Ziel dieses Kalman-Ansatzes war ausdrücklich
+        # "vorausschauendes Blitzen" auf der VORHERGESAGTEN, geglätteten
+        # Taktung (_kalman_flash_t, siehe Docstring oben) statt auf jedem
+        # einzelnen echten Treffer - in der Praxis zeigte sich (echtes
+        # live_monitor.log, mehrfach ausgewertet) aber genau das als das
+        # Problem: die Vorhersage kann auf eine falsche Periode einrasten
+        # (z.B. 0.51s statt der echten 0.64s bei 93.8 BPM) und blitzt dann
+        # stabil, aber hörbar NICHT im Takt - für eine Club-Lichtshow
+        # schlimmer als ein gelegentlicher, durch strenge Sharpness-/HPSS-
+        # Gates bedingter Dropout. `kick_trigger` feuert jetzt direkt auf
+        # `is_impulse` (derselbe echte, gated Kandidat wie GATE_DIAG mit
+        # reject_reason=None) - exakt dasselbe Prinzip wie snare_trigger/
+        # clap_trigger, die nie eine Vorhersage-Schicht hatten. Das
+        # Kalman-Schwungrad (_kalman_advance) läuft im Hintergrund
+        # unverändert weiter (speist weiterhin kick_debug's kalman_state
+        # für Diagnosezwecke, siehe _kalman_kick_trigger unten), beeinflusst
+        # aber nicht mehr, WANN der echte Trigger feuert.
         fired = self._kalman_advance(now)
         with self._lock:
             self._kalman_kick_trigger = fired
-            self._kick_trigger = fired
+            self._kick_trigger = is_impulse
 
     _KICK_GATE_OFFSETS_MS = (0, 20, 40, 60, 80)
 

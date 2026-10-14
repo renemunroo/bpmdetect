@@ -289,6 +289,51 @@ class KickTriggerTests(unittest.TestCase):
             self.assertIsNone(dbg["reject_reason"], dbg)
             self.assertTrue(dbg["is_sharp"])
 
+    def test_kick_trigger_fires_directly_on_every_real_impulse_no_flywheel(self) -> None:
+        """Bugfix 2026-10-14 (Live-Club-Test, klare Nutzer-Anforderung:
+        "einen Trigger auf jede Kick und einen Trigger auf jede Snare.
+        Punkt."): kick_trigger feuerte bisher auf der VORHERGESAGTEN
+        Kalman-Taktung (_kalman_flash_t), nicht auf dem rohen akzeptierten
+        Impuls - konnte dadurch auf eine falsche Periode einrasten und
+        dauerhaft hörbar neben dem Takt blitzen (echtes live_monitor.log
+        bestätigt: 0.51s statt der echten 0.64s/93.8 BPM). Jetzt muss
+        kick_trigger exakt dem rohen, akzeptierten Impuls entsprechen -
+        (1) feuert SOFORT beim allerersten jemals akzeptierten Impuls,
+        ganz ohne vorherigen Bootstrap/Lock, und (2) bleibt in einer
+        stillen Lücke zwischen zwei echten Treffern False, auch wenn ein
+        bereits gelockter Flywheel an dieser Stelle vorhersagen würde."""
+        with patch.object(bd.time, "time", new=self.clock):
+            self._silence(30)
+            burst = tone_blocks(self.det, 60.0, 0.8, 1)[0]
+
+            # (1) Allererster Impuls überhaupt - kein Bootstrap nötig mehr.
+            self.det._update_kalman_kick(burst)
+            self.assertIsNone(self.det.kick_debug["reject_reason"])
+            self.assertTrue(self.det.kick_trigger, "muss sofort beim ersten echten Impuls feuern, ganz ohne vorherigen Lock")
+
+            # Direkt im nächsten Block (kein neuer Impuls) muss es wieder
+            # False sein - kein abklingender/anhaltender Puls.
+            self.det._update_kalman_kick(np.zeros(self.det._bs, dtype=np.float32))
+            self.clock.advance(self.det._hop)
+            self.assertFalse(self.det.kick_trigger)
+
+            # (2) Lock etablieren (zweiter Treffer im gültigen Tempo-
+            # Bereich), dann eine stille Lücke GENAU an der Stelle, wo ein
+            # gelockter Flywheel vorhersagen würde (Periode ~0.46s bei
+            # diesem 40-Block-Abstand) - kick_trigger darf dort trotzdem
+            # nicht feuern, da kein echter Kandidat vorliegt.
+            for _ in range(40):
+                self.det._update_kalman_kick(np.zeros(self.det._bs, dtype=np.float32))
+                self.clock.advance(self.det._hop)
+            self.det._update_kalman_kick(burst)
+            self.assertIsNone(self.det.kick_debug["reject_reason"])
+            self.assertTrue(self.det._kalman_initialized, "Testvoraussetzung: Flywheel sollte jetzt gelockt sein")
+
+            for _ in range(40):  # exakt die gelockte Periode, aber NUR Stille, kein echter Kandidat
+                self.det._update_kalman_kick(np.zeros(self.det._bs, dtype=np.float32))
+                self.assertFalse(self.det.kick_trigger, "darf trotz gelocktem Flywheel nicht auf Vorhersage feuern, nur auf echten Treffern")
+                self.clock.advance(self.det._hop)
+
     def test_sustained_deep_signal_not_every_block(self) -> None:
         """Ein lang gehaltenes, tiefes Signal (kein echter Kick-Transient,
         z.B. eine Bassline/808-Sustain-Note) darf nicht bei jedem Block neu

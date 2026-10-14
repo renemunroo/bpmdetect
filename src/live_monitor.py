@@ -41,12 +41,14 @@ from typing import Optional
 # im Ausgangsbefund) kein einziger Kick jemals triggert.
 #
 # Runde 7: kick_event_source unterscheidet, WARUM eine Zeile einen Kick
-# zeigt - ein per _update_kalman_kick tatsächlich akzeptierter Kandidat
-# (reject_reason is None) ist etwas anderes als ein Kalman-Vorhersageblitz
-# (detector.kick_trigger feuert auf dem gelernten Beat-Zeitplan, obwohl der
-# Frontend-Kandidat DIESES Blocks abgelehnt wurde - siehe Diagnose der
-# reorder_fixed-Trigger, wo alle 10 Events reason≠None hatten). Reine
-# Klassifikation aus bereits vorhandenen Werten, keine neue Entscheidung.
+# zeigt - ursprünglich war das relevant, weil detector.kick_trigger auf dem
+# gelernten Kalman-Beat-Zeitplan feuerte und so auch dann True sein konnte,
+# wenn der Frontend-Kandidat DIESES Blocks abgelehnt wurde ("kalman_
+# prediction"). Seit 2026-10-14 (Nutzer-Anforderung "Trigger auf jede Kick")
+# feuert kick_trigger nur noch direkt auf reject_reason is None - der
+# "kalman_prediction"-Fall unten kann dadurch faktisch nicht mehr auftreten,
+# die Unterscheidung bleibt aber als reine, harmlose Klassifikation aus
+# bereits vorhandenen Werten stehen (kein Aufräumen ohne Auftrag).
 _CSV_COLUMNS = [
     "t", "iso_time", "type",
     "kick_envelope", "kick_threshold", "kick_baseline_mean", "kick_baseline_std",
