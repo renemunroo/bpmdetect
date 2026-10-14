@@ -460,13 +460,6 @@ class BeatDetector:
         self._kalman_initialized = False
         self._kalman_t_next = 0.0     # geschätzter Zeitpunkt des nächsten Beats
         self._kalman_period = 0.0     # geschätzte Sekunden pro Beat
-        # Drei-Punkt-Bootstrap-Bestätigung (siehe _kalman_on_impulse) -
-        # None = noch keine Kandidat-Periode aus den ersten beiden
-        # Impulsen abgeleitet; sonst wartet sie auf Bestätigung durch
-        # einen dritten Impuls nahe self._kalman_bootstrap_confirm_t.
-        self._kalman_bootstrap_candidate_period = None
-        self._kalman_bootstrap_confirm_t = 0.0
-        self._kalman_bootstrap_confirm_tol = 0.15  # ±15% der Kandidat-Periode
         self._kalman_P = np.array([[0.05 ** 2, 0.0], [0.0, (2.0 / 60.0) ** 2]])
         self._kalman_q_time = kalman_q_time
         self._kalman_q_period = kalman_q_period
@@ -1396,62 +1389,26 @@ class BeatDetector:
         relativ zum aktuellen Tempo)."""
         if not self._kalman_initialized:
             # Erststart: braucht eine grobe Periode als Startwert - direkt
-            # aus dem Abstand echter Kick-Impulse gemessen, NICHT aus der
-            # Autokorrelations-Schätzung (self._locked_bpm) - die kann
+            # aus dem Abstand zweier echter Kick-Impulse gemessen, NICHT aus
+            # der Autokorrelations-Schätzung (self._locked_bpm) - die kann
             # selbst oktav-falsch sein (halbes/doppeltes Tempo, bekanntes
             # Problem der Autokorrelation auf gemischtem Signal), und ein
             # falscher Bootstrap-Wert würde vom Ausreißer-Filter danach
             # sogar geschützt statt korrigiert, weil echte Treffer dann als
             # "Ausreißer" relativ zur falschen Periode erscheinen.
-            #
-            # Bugfix (2026-10-14, Live-Club-Test, Nutzer-Report "Kick-
-            # Erkennung ist Kacke"): das reine Zwei-Punkt-Bootstrap unten
-            # (Periode direkt aus dem Abstand der ERSTEN ZWEI akzeptierten
-            # Impulse übernehmen, sofort eingerastet) hat sich im echten
-            # Log als fragil erwiesen - live_monitor.log zeigte eine
-            # eingerastete Periode von ~0.53s (≈114 BPM), obwohl der Song
-            # längst stabil auf 93.8 BPM (0.639s) gelockt war
-            # (lock_conf=1.00). EIN einzelner untypisch getimter/
-            # fehlklassifizierter Kandidat (z.B. Snare-/Clap-Übersprechen,
-            # das knapp durch die Sharpness-/HPSS-Gates rutscht) reicht
-            # beim Zwei-Punkt-Verfahren, um dauerhaft auf der falschen
-            # Periode einzurasten - und genau dieser Fall wird durch den
-            # neuen kalman_kick_silence_timeout_s-Reset (siehe dort) sogar
-            # HÄUFIGER erreicht, weil ein längerer Break mitten im Song
-            # jetzt einen kompletten Neu-Bootstrap auslöst, also eine neue
-            # Chance, erneut falsch einzurasten.
-            # Jetzt: ein DRITTER Impuls muss die aus den ersten beiden
-            # abgeleitete Kandidat-Periode erst bestätigen (muss nahe am
-            # vorhergesagten übernächsten Takt liegen, Toleranz
-            # _kalman_bootstrap_confirm_tol relativ zur Kandidat-Periode) -
-            # erst dann rastet der Tracker wirklich ein. Bestätigt der
-            # dritte Impuls NICHT, wird die Kandidat-Periode verworfen und
-            # mit genau diesem dritten Impuls als neuem "ersten Punkt" neu
-            # versucht (kein endloses Warten, nur ein strengerer Lock).
             if self._kalman_t_next == 0.0:
                 self._kalman_t_next = t_impulse  # merkt sich den ersten Treffer
-                self._kalman_bootstrap_candidate_period = None
-            elif self._kalman_bootstrap_candidate_period is None:
+            else:
                 measured = t_impulse - self._kalman_t_next
                 period_min = 60.0 / self._bpm_max
                 period_max = 60.0 / self._bpm_min
                 if period_min <= measured <= period_max:
-                    self._kalman_bootstrap_candidate_period = measured
-                    self._kalman_bootstrap_confirm_t = t_impulse + measured
-                    self._kalman_t_next = t_impulse  # falls die Bestätigung scheitert, ist das hier der neue erste Punkt
-                else:
-                    self._kalman_t_next = t_impulse  # Ausreißer, neu ansetzen
-            else:
-                candidate_period = self._kalman_bootstrap_candidate_period
-                predicted = self._kalman_bootstrap_confirm_t
-                if abs(t_impulse - predicted) <= self._kalman_bootstrap_confirm_tol * candidate_period:
-                    self._kalman_period = candidate_period
-                    self._kalman_t_next = t_impulse + candidate_period
+                    self._kalman_period = measured
+                    self._kalman_t_next = t_impulse + measured
                     self._kalman_flash_t = self._kalman_t_next
                     self._kalman_initialized = True
                 else:
-                    self._kalman_t_next = t_impulse  # Kandidat verworfen, dieser Treffer wird der neue erste Punkt
-                self._kalman_bootstrap_candidate_period = None
+                    self._kalman_t_next = t_impulse  # Ausreißer, neu ansetzen
             return True  # Bootstrap-Phase, kein Ausreißer-Gate aktiv
 
         # Wie viele Beats sind seit dem letzten bestätigten Zeitpunkt

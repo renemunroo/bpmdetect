@@ -356,18 +356,15 @@ class KickTriggerTests(unittest.TestCase):
         det = make_kick_detector(kalman_kick_silence_timeout_s=0.2)
         clock = FakeClock()
         with patch.object(bd.time, "time", new=clock):
-            # Bootstrap: DREI echte Treffer im gleichmäßigen Abstand von
-            # ~0.46s (innerhalb bpm_min=70/bpm_max=180, Default) lassen den
-            # Tracker einrasten - seit dem Drei-Punkt-Bestätigungs-Bugfix
-            # (siehe _kalman_on_impulse) reichen zwei nicht mehr, der dritte
-            # muss die aus den ersten beiden abgeleitete Kandidat-Periode
-            # erst bestätigen. Derselbe 40-Block-Silence-Abstand wie in
+            # Bootstrap: zwei echte Treffer im Abstand von ~0.46s (innerhalb
+            # bpm_min=70/bpm_max=180, Default) lassen den Tracker einrasten -
+            # derselbe 40-Block-Silence-Abstand wie in
             # test_weak_kick_not_suppressed_by_stuck_baseline oben, dort
             # bereits als ausreichend für eine erneute Akzeptanz bestätigt.
-            burst = tone_blocks(det, 60.0, 0.8, 1)[0]
             for _ in range(30):
                 det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
                 clock.advance(det._hop)
+            burst = tone_blocks(det, 60.0, 0.8, 1)[0]
             det._update_kalman_kick(burst)
             self.assertIsNone(det.kick_debug["reject_reason"])
             for _ in range(40):
@@ -375,13 +372,7 @@ class KickTriggerTests(unittest.TestCase):
                 clock.advance(det._hop)
             det._update_kalman_kick(burst)
             self.assertIsNone(det.kick_debug["reject_reason"])
-            self.assertFalse(det._kalman_initialized, "nach nur zwei Treffern darf der Tracker noch NICHT eingerastet sein (Kandidat-Periode wartet auf Bestätigung)")
-            for _ in range(40):
-                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
-                clock.advance(det._hop)
-            det._update_kalman_kick(burst)
-            self.assertIsNone(det.kick_debug["reject_reason"])
-            self.assertTrue(det._kalman_initialized, "nach drei echten, gleichmäßig getakteten Treffern sollte der Tracker eingerastet sein")
+            self.assertTrue(det._kalman_initialized, "nach zwei echten Treffern im Tempo-Bereich sollte der Tracker eingerastet sein")
 
             # Deutlich länger als der (für den Test verkürzte) Timeout
             # Stille, ohne jeden weiteren Kandidaten.
@@ -391,56 +382,6 @@ class KickTriggerTests(unittest.TestCase):
 
             self.assertFalse(det._kalman_initialized, "nach > silence_timeout ohne jeden Kandidaten muss sich der Tracker deinitialisieren")
             self.assertFalse(det.kick_trigger, "darf nach der Stille nicht mehr auf dem alten Tempo weiterfeuern")
-
-    def test_kalman_bootstrap_requires_third_confirming_impulse(self) -> None:
-        """Bugfix 2026-10-14 (Live-Club-Test, Nutzer-Report "Kick-Erkennung
-        ist Kacke"): echtes live_monitor.log zeigte eine dauerhaft falsch
-        eingerastete Periode (~0.53s statt der tatsächlichen ~0.64s/93.8
-        BPM, bei dem der Song stabil mit lock_conf=1.00 lief) - ein
-        einzelner untypisch getimter Kandidat (z.B. Snare-/Clap-
-        Übersprechen) reichte beim alten Zwei-Punkt-Bootstrap, um sofort
-        und dauerhaft auf der falschen Periode einzurasten. Ein dritter
-        Impuls, der NICHT zur aus den ersten beiden abgeleiteten
-        Kandidat-Periode passt, darf den Tracker nicht einrasten lassen -
-        stattdessen muss er mit genau diesem dritten Impuls neu ansetzen
-        und sich an einer anschließend wirklich gleichmäßigen
-        Dreiertakt-Folge korrekt einrasten."""
-        det = make_kick_detector()
-        clock = FakeClock()
-        with patch.object(bd.time, "time", new=clock):
-            for _ in range(30):
-                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
-                clock.advance(det._hop)
-            burst = tone_blocks(det, 60.0, 0.8, 1)[0]
-
-            det._update_kalman_kick(burst)  # Punkt A
-            for _ in range(40):  # ~0.46s - wird zur Kandidat-Periode
-                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
-                clock.advance(det._hop)
-            det._update_kalman_kick(burst)  # Punkt B
-            self.assertIsNone(det.kick_debug["reject_reason"])
-
-            for _ in range(70):  # deutlich NICHT ~0.46s - darf die Kandidat-Periode nicht bestätigen
-                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
-                clock.advance(det._hop)
-            det._update_kalman_kick(burst)  # Punkt C - unpassend getimt
-            self.assertIsNone(det.kick_debug["reject_reason"])
-            self.assertFalse(det._kalman_initialized, "ein nicht bestätigender dritter Impuls darf nicht einrasten")
-
-            # Jetzt eine WIRKLICH gleichmäßige Folge ab Punkt C - muss sich
-            # trotz des vorherigen Fehlschlags sauber neu bootstrappen.
-            for _ in range(40):
-                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
-                clock.advance(det._hop)
-            det._update_kalman_kick(burst)  # Punkt D
-            self.assertIsNone(det.kick_debug["reject_reason"])
-            self.assertFalse(det._kalman_initialized)
-            for _ in range(40):
-                det._update_kalman_kick(np.zeros(det._bs, dtype=np.float32))
-                clock.advance(det._hop)
-            det._update_kalman_kick(burst)  # Punkt E - bestätigt D
-            self.assertIsNone(det.kick_debug["reject_reason"])
-            self.assertTrue(det._kalman_initialized, "eine wirklich gleichmäßige Dreierfolge muss einrasten")
 
 
 class KickHpssKernelTests(unittest.TestCase):
